@@ -1,7 +1,21 @@
 package main
 
-import "github.com/HimanshuSardana/harbor/internal/imap"
+import (
+	"fmt"
+
+	"github.com/HimanshuSardana/harbor/internal/services"
+)
 
 func main() {
-	imap.FetchMails()
+	emails, err := services.GetEmails()
+	if err != nil {
+		panic(err)
+	}
+
+	for _, email := range emails {
+		fmt.Println("--------------------------------")
+		fmt.Println("From:", email.From)
+		fmt.Println("Subject:", email.Subject)
+		fmt.Println("Date:", email.Date)
+	}
 }

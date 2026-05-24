@@ -3,18 +3,15 @@ package main
 import (
 	"fmt"
 
-	"github.com/HimanshuSardana/harbor/internal/config"
-	"github.com/HimanshuSardana/harbor/internal/imap"
+	"github.com/HimanshuSardana/harbor/internal/services"
 )
 
 func main() {
-	cfg, err := config.LoadConfig("./accounts.toml")
+	emails, err := services.GetEmails()
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
 	}
-
-	for _, acc := range cfg.Accounts {
-		fmt.Println(acc.Email)
-		imap.FetchMails(acc.Name)
+	for _, m := range emails {
+		fmt.Println(m.Subject)
 	}
 }
