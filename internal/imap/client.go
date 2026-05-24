@@ -9,6 +9,17 @@ import (
 	"github.com/emersion/go-imap/client"
 )
 
+// FetchMails connects to an IMAP server and retrieves emails for a specified account
+//
+// Parameters:
+//   accountName - The name of the account to fetch emails from (must exist in accounts.toml)
+//
+// This function:
+// 1. Loads the configuration from accounts.toml
+// 2. Finds the specified account configuration
+// 3. Connects to the IMAP server using the account's host and port
+// 4. Logs in using the account's email and password
+// 5. Fetches and displays the most recent emails (up to 10)
 func FetchMails(accountName string) {
 	cfg, err := config.LoadConfig("accounts.toml")
 	if err != nil {

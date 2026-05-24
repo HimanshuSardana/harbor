@@ -20,6 +20,14 @@ type Config struct {
 	Accounts []Account `toml:"accounts"`
 }
 
+// LoadConfig reads and parses a TOML configuration file
+//
+// Parameters:
+//   path - The file path to the TOML configuration file
+//
+// Returns:
+//   *Config - The parsed configuration structure
+//   error - Any error encountered during file reading or parsing
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
