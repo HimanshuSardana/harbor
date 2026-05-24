@@ -12,7 +12,8 @@ import (
 // FetchMails connects to an IMAP server and retrieves emails for a specified account
 //
 // Parameters:
-//   accountName - The name of the account to fetch emails from (must exist in accounts.toml)
+//
+//	accountName - The name of the account to fetch emails from (must exist in accounts.toml)
 //
 // This function:
 // 1. Loads the configuration from accounts.toml
@@ -58,6 +59,11 @@ func FetchMails(accountName string) {
 	}
 
 	fmt.Println("Total messages:", mbox.Messages)
+
+	if mbox.Messages == 0 {
+		fmt.Println("No messages found")
+		return
+	}
 
 	from := uint32(1)
 
