@@ -1,0 +1,20 @@
+{
+  "name": "harbor",
+  "version": "0.1.0",
+  "description": "Harbor - Email client desktop app",
+  "private": true,
+  "scripts": {
+    "dev": "bun src/bun/index.ts",
+    "start": "bun run dev",
+    "build": "electrobun build",
+    "build:canary": "electrobun build --env canary",
+    "build:stable": "electrobun build --env stable"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
