@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+backend/vendor/
+
+# Build output
+backend/server
+frontend/dist/
+frontend/build/
+
+# Electrobun
+frontend/Electrobun*.app/
+frontend/*.dmg
+frontend/*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
