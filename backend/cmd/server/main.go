@@ -1,21 +1,38 @@
 package main
 
 import (
-	"fmt"
+	"log"
+	"net/http"
+	"os"
 
-	"github.com/HimanshuSardana/harbor/backend/internal/services"
+	"github.com/HimanshuSardana/harbor/backend/internal/api"
 )
 
 func main() {
-	emails, err := services.GetEmails()
-	if err != nil {
-		panic(err)
+	configPath := os.Getenv("HARBOR_CONFIG")
+	if configPath == "" {
+		configPath = "configs/accounts.toml"
 	}
 
-	for _, email := range emails {
-		fmt.Println("--------------------------------")
-		fmt.Println("From:", email.From)
-		fmt.Println("Subject:", email.Subject)
-		fmt.Println("Date:", email.Date)
+	port := os.Getenv("HARBOR_PORT")
+	if port == "" {
+		port = "3002"
+	}
+
+	h := api.NewHandler(configPath)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", h.Health)
+	mux.HandleFunc("GET /api/accounts", h.GetAccounts)
+	mux.HandleFunc("GET /api/emails", h.GetEmails)
+
+	handler := api.CORS(mux)
+
+	addr := ":" + port
+	log.Printf("Harbor API server starting on %s", addr)
+	log.Printf("Config path: %s", configPath)
+
+	if err := http.ListenAndServe(addr, handler); err != nil {
+		log.Fatalf("Server failed: %v", err)
 	}
 }

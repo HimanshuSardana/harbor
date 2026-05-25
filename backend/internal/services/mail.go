@@ -6,6 +6,7 @@ import (
 	"github.com/HimanshuSardana/harbor/backend/internal/types"
 )
 
+// GetEmails loads the config and fetches emails for the first account.
 func GetEmails() ([]types.Email, error) {
 	cfg, err := config.LoadConfig("configs/accounts.toml")
 	if err != nil {
@@ -18,5 +19,10 @@ func GetEmails() ([]types.Email, error) {
 
 	account := cfg.Accounts[0]
 
+	return imap.FetchEmails(account)
+}
+
+// FetchEmails fetches emails for a given account configuration.
+func FetchEmails(account config.Account) ([]types.Email, error) {
 	return imap.FetchEmails(account)
 }
