@@ -598,45 +598,20 @@ export default function App() {
 
 	return (
 		<div
-			className={`grid h-screen w-screen overflow-hidden bg-black text-zinc-100 select-none ${theme === 'catppuccin' ? 'catppuccin' : ''}`}
-			style={{ gridTemplateRows: "48px 1fr 32px" }}
+			className={`flex flex-col h-screen w-screen overflow-hidden bg-black text-zinc-100 select-none ${theme === 'catppuccin' ? 'catppuccin' : ''}`}
 		>
-			{/* ── Title bar ── */}
-			<header className="flex items-center justify-between border-b border-zinc-900 bg-black px-5">
-				<div className="flex items-center gap-3">
-					<span className="text-md font-bold tracking-tight text-white">harbor</span>
-					<span className="text-[9px] font-medium uppercase tracking-[0.25em] text-zinc-500">Mail Client</span>
-				</div>
-				<div className="flex items-center gap-3">
-					{accounts.length > 0 && (
-						<span className="hidden text-xs font-mono text-zinc-400 md:inline">{accounts[0].email}</span>
-					)}
-					<button
-						onClick={handleRefresh}
-						disabled={refreshing}
-						className="group flex h-7 w-7 items-center justify-center rounded border border-zinc-800 bg-black text-zinc-400 transition hover:border-zinc-600 hover:text-white disabled:opacity-40"
-						title="Refresh"
-					>
-						<svg className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-							<path d="M1 4v6h6M23 20v-6h-6" />
-							<path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
-						</svg>
-					</button>
-				</div>
-			</header>
-
 			{/* ── 3 Column Workplace ── */}
-			<div className="flex h-full w-full overflow-hidden">
+			<div className="flex flex-1 min-h-0 w-full overflow-hidden pt-3 pb-3">
 
 				{/* ── Column 1: Sidebar (collapsible with Ctrl+B) ── */}
 				<aside
-					className={`hidden md:block overflow-hidden bg-black shrink-0 transition-[width] duration-200 ease-in-out ${sidebarOpen ? "border-r border-zinc-900" : "border-r-0"}`}
-					style={{ width: isMobile ? '0px' : sidebarOpen ? `${col1Width}px` : '0px' }}
+					className={`hidden md:block overflow-hidden bg-black shrink-0 transition-[width] duration-200 ease-in-out border-r border-zinc-900`}
+					style={{ width: isMobile ? '0px' : sidebarOpen ? `${col1Width}px` : '52px' }}
 				>
 					<div className="flex h-full flex-col">
-						<div className="flex items-center justify-between border-b border-zinc-900 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-zinc-500">
-							<span>Folders</span>
-							<span>{emails.length}</span>
+						<div className={`flex items-center border-b border-zinc-900 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-zinc-500 ${sidebarOpen ? "justify-between" : "justify-center"}`}>
+							<span className={sidebarOpen ? "" : "hidden"}>Folders</span>
+							<span className={sidebarOpen ? "" : "hidden"}>{emails.length}</span>
 						</div>
 						<nav className="flex-1 overflow-y-auto divide-y divide-zinc-900/60">
 							{[
@@ -644,30 +619,31 @@ export default function App() {
 								{ label: "Unread", icon: "M12 19l9 2-9-18-9 18 9-2zm0 0v-8", active: false },
 								{ label: "Important", icon: "M12 9v2m0 4h.01M12 3l9.66 5.33v5.34L12 21l-9.66-5.33V8.33L12 3z", active: false },
 							].map((item) => (
-								<button key={item.label} className={`w-full px-4 py-3 text-left transition ${item.active ? "bg-zinc-900 ring-1 ring-inset ring-zinc-600" : "bg-black hover:bg-zinc-950/60"}`}>
-									<div className="flex items-center gap-2.5">
+								<button key={item.label} className={`w-full px-4 py-3 text-left transition flex items-center ${sidebarOpen ? "justify-start" : "justify-center"} ${item.active ? "bg-zinc-900 ring-1 ring-inset ring-zinc-600" : "bg-black hover:bg-zinc-950/60"}`}>
+									<div className={`flex items-center ${sidebarOpen ? "gap-2.5" : "gap-0 flex-col"}`}>
 										<svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path d={item.icon} /></svg>
-										<span className={`truncate text-xs ${item.active ? "font-medium text-white" : "text-zinc-300"}`}>{item.label}</span>
+										<span className={`${sidebarOpen ? "truncate text-xs" : "text-[8px] mt-0.5 text-zinc-500 truncate max-w-full"} ${item.active ? "font-medium text-white" : "text-zinc-300"}`}>{item.label}</span>
 									</div>
 								</button>
 							))}
 						</nav>
 						{accounts.length > 0 && (
 							<div className="border-t border-zinc-900">
-								<div className="flex items-center justify-between px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-zinc-500">
-									<span>Accounts</span>
+								<div className={`flex items-center px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-zinc-500 ${sidebarOpen ? "justify-between" : "justify-center"}`}>
+									<span className={sidebarOpen ? "" : "hidden"}>Accounts</span>
 								</div>
 								{accounts.map((acc) => {
 									const name = acc.email.split("@")[0];
 									return (
-										<div key={acc.email} className="flex items-center gap-2.5 px-4 py-3 text-xs transition bg-black hover:bg-zinc-950/60">
+										<div key={acc.email} className={`flex items-center ${sidebarOpen ? "gap-2.5 px-4" : "gap-0 justify-center px-0"} py-3 text-xs transition bg-black hover:bg-zinc-950/60`}>
 											<span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-zinc-800 text-[8px] font-bold text-zinc-400">{name[0]?.toUpperCase()}</span>
-											<div className="truncate min-w-0">
+											<div className={`truncate min-w-0 ${sidebarOpen ? "" : "hidden"}`}>
 												<p className="text-zinc-300 truncate">{name}</p>
 												<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
+											</div>
 										</div>
-									</div>
-								);})}
+									);
+								})}
 							</div>
 						)}
 					</div>
@@ -810,7 +786,7 @@ export default function App() {
 			</div>
 
 			{/* ── Status bar ── */}
-			<footer className="flex items-center justify-between border-t border-zinc-900 bg-black px-4 text-[10px] font-mono text-zinc-500">
+			<footer className="flex items-center justify-between border-t border-zinc-900 bg-black px-4 text-[10px] font-mono text-zinc-500 pb-2 pt-2">
 				<span className="flex items-center gap-2">
 					{error ? "⚠ disconnected" : loading ? "connecting…" : loadingMore ? `⟳ loading more… (${emails.length})` : emails.length > 0 ? `${emails.length} messages` : "ready"}
 					{visualMode && focusedPanel === 'reader' && plainText && (

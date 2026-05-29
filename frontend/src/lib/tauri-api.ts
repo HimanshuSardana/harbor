@@ -56,7 +56,7 @@ function toEmail(e: TauriEmail): Email {
 export async function fetchEmails(limit: number, offset: number): Promise<Email[]> {
 	if (isTauri()) {
 		const rows = await tauriInvoke<TauriEmail[]>("get_emails", { limit, offset });
-		return rows.map(toEmail);
+		return rows.map(toEmail).reverse(); // Ensure newest-first order
 	}
 	// Fallback: HTTP API
 	const res = await fetch(`${API_BASE}/api/emails?limit=${limit}&offset=${offset}`);
