@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/HimanshuSardana/harbor/backend/internal/config"
 	"github.com/HimanshuSardana/harbor/backend/internal/services"
@@ -44,7 +45,9 @@ func (h *Handler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, accounts)
 }
 
-// GetEmails fetches emails for the first account or a specified account.
+// GetEmails fetches emails for the first configured account.
+// Supports optional ?limit (default 10, max 100) and ?offset (default 0) query
+// parameters for pagination.
 func (h *Handler) GetEmails(w http.ResponseWriter, r *http.Request) {
 	if len(h.cfg.Accounts) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{
@@ -53,8 +56,11 @@ func (h *Handler) GetEmails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limit := parseIntParam(r, "limit", 10)
+	offset := parseIntParam(r, "offset", 0)
+
 	account := h.cfg.Accounts[0]
-	emails, err := services.FetchEmails(account)
+	emails, err := services.FetchEmails(account, limit, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),
@@ -70,6 +76,20 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
+}
+
+// parseIntParam reads an integer query parameter. If missing or unparsable it
+// returns the provided default value.
+func parseIntParam(r *http.Request, name string, defaultVal int) int {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return defaultVal
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultVal
+	}
+	return val
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

@@ -16,9 +16,10 @@ import (
 )
 
 // FetchEmails connects to an IMAP server and retrieves emails for a specified
-// account. Returns up to 10 most recent emails including their HTML body when
-// available (falls back to plain text).
-func FetchEmails(account config.Account) ([]types.Email, error) {
+// account. limit controls the max number of emails returned (default 10, max
+// 100). offset controls how many of the most recent emails to skip (for
+// pagination). Pass limit=0 to use the default.
+func FetchEmails(account config.Account, limit, offset int) ([]types.Email, error) {
 	c, err := client.DialTLS(account.ImapHost+":993", nil)
 	if err != nil {
 		return nil, err
@@ -34,14 +35,30 @@ func FetchEmails(account config.Account) ([]types.Email, error) {
 		return nil, err
 	}
 
-	from := uint32(1)
-	if mbox.Messages > 10 {
-		from = mbox.Messages - 9
+	// Apply limit/offset.
+	if limit <= 0 {
+		limit = 10
 	}
-	to := mbox.Messages
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	total := int(mbox.Messages)
+	end := total - offset           // newest end, after skipping offset
+	start := end - limit + 1        // oldest end, limited by count
+	if start < 1 {
+		start = 1
+	}
+	if end < 1 {
+		// Offset past the beginning → empty result
+		return []types.Email{}, nil
+	}
 
 	seqset := new(imap.SeqSet)
-	seqset.AddRange(from, to)
+	seqset.AddRange(uint32(start), uint32(end))
 
 	// ---------------------------------------------------------------------------
 	// Phase 1 — fetch envelope + body structure for every message
@@ -51,7 +68,7 @@ func FetchEmails(account config.Account) ([]types.Email, error) {
 		imap.FetchBodyStructure,
 	}
 
-	messages := make(chan *imap.Message, 10)
+	messages := make(chan *imap.Message, limit)
 	var fetchErr error
 	go func() {
 		fetchErr = c.Fetch(seqset, items, messages)

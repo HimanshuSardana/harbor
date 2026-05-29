@@ -65,9 +65,33 @@ func BuildDocsSpec() map[string]interface{} {
 			"/api/emails": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Fetch recent emails",
-					"description": "Fetches up to 10 most recent emails from the first configured IMAP account.",
+					"description": "Fetches recent emails from the first configured IMAP account.",
 					"operationId": "getEmails",
 					"tags":        []string{"Emails"},
+					"parameters": []map[string]interface{}{
+						{
+							"name":        "limit",
+							"in":          "query",
+							"description": "Max number of emails to return (default 10, max 100).",
+							"required":    false,
+							"schema": map[string]interface{}{
+								"type":    "integer",
+								"default": 10,
+								"maximum": 100,
+							},
+						},
+						{
+							"name":        "offset",
+							"in":          "query",
+							"description": "Number of most-recent emails to skip (for pagination).",
+							"required":    false,
+							"schema": map[string]interface{}{
+								"type":    "integer",
+								"default": 0,
+								"minimum": 0,
+							},
+						},
+					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{
 							"description": "An array of recent emails.",
