@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { EditorView, keymap, drawSelection } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
-import { vim } from "@replit/codemirror-vim";
+import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
+import { Compartment, EditorState } from "@codemirror/state";
+import { Vim, vim } from "@replit/codemirror-vim";
 
 const API_BASE = "http://localhost:3002";
 
@@ -77,7 +77,7 @@ function buildIframeDoc(email: Email): string {
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       padding: 24px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: "Iosevka", "Cascadia Code", "Fira Code", "SF Mono", Menlo, Monaco, monospace;
       font-size: 14px;
       line-height: 1.6;
       color: #e4e4e7;
@@ -120,9 +120,13 @@ function bodyPreview(html: string | undefined, maxLen = 80): string {
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function App() {
+	const PAGE_SIZE = 5;
+
 	const [emails, setEmails] = useState<Email[]>([]);
 	const [accounts, setAccounts] = useState<Account[]>([]);
 	const [loading, setLoading] = useState(true);
+	const [loadingMore, setLoadingMore] = useState(false);
+	const [hasMore, setHasMore] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 	const [refreshing, setRefreshing] = useState(false);
@@ -133,6 +137,10 @@ export default function App() {
 	const listRef = useRef<HTMLDivElement | null>(null);
 	const cmContainerRef = useRef<HTMLDivElement | null>(null);
 	const cmViewRef = useRef<EditorView | null>(null);
+	const wrapCompRef = useRef(new Compartment());
+	const numCompRef = useRef(new Compartment());
+	const exDefined = useRef(false);
+	const offsetRef = useRef(0);
 
 	// Resizing States
 	const [col1Width, setCol1Width] = useState(240);
@@ -151,12 +159,15 @@ export default function App() {
 		return () => window.removeEventListener("resize", handleResize);
 	}, []);
 
+	// ── Initial fetch ──
 	const fetchData = useCallback(async (silent = false) => {
 		if (!silent) setLoading(true);
 		setError(null);
+		offsetRef.current = 0;
+		// Always fetch accounts alongside the first emails request.
 		try {
 			const [emailsRes, accountsRes] = await Promise.all([
-				fetch(`${API_BASE}/api/emails`),
+				fetch(`${API_BASE}/api/emails?limit=${PAGE_SIZE}`),
 				fetch(`${API_BASE}/api/accounts`),
 			]);
 			if (!emailsRes.ok) throw new Error(`Emails API: ${emailsRes.status}`);
@@ -165,8 +176,12 @@ export default function App() {
 				emailsRes.json(),
 				accountsRes.json(),
 			]);
-			setEmails(emailsData);
+			// API returns oldest-first within the most-recent batch.
+			// Reverse so newest appears at top of the list.
+			const sorted = [...emailsData].reverse();
+			setEmails(sorted);
 			setAccounts(accountsData);
+			setHasMore(emailsData.length === PAGE_SIZE);
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : "Unknown error";
 			setError(msg);
@@ -177,6 +192,44 @@ export default function App() {
 	}, []);
 
 	useEffect(() => { fetchData(); }, [fetchData]);
+
+	// ── Load more (infinite scroll) ──
+	const loadMoreEmails = useCallback(async () => {
+		if (!hasMore || loadingMore) return;
+		setLoadingMore(true);
+		try {
+			const offset = offsetRef.current;
+			const res = await fetch(`${API_BASE}/api/emails?limit=${PAGE_SIZE}&offset=${offset}`);
+			if (!res.ok) throw new Error(`Emails API: ${res.status}`);
+			const data: Email[] = await res.json();
+			if (data.length < PAGE_SIZE) setHasMore(false);
+			if (data.length > 0) {
+				// Reverse each batch so newest appears first within the batch,
+				// then append so the list stays newest→oldest top→bottom.
+				setEmails(prev => [...prev, ...data.reverse()]);
+				offsetRef.current = offset + data.length;
+			}
+		} catch {
+			// silently swallow load-more errors
+		} finally {
+			setLoadingMore(false);
+		}
+	}, [hasMore, loadingMore]);
+
+	// ── Infinite scroll: detect when near bottom of list ──
+	useEffect(() => {
+		const el = listRef.current;
+		if (!el) return;
+		const onScroll = () => {
+			if (!hasMore || loadingMore) return;
+			const { scrollTop, scrollHeight, clientHeight } = el;
+			if (scrollHeight - scrollTop - clientHeight < 300) {
+				loadMoreEmails();
+			}
+		};
+		el.addEventListener('scroll', onScroll, { passive: true });
+		return () => el.removeEventListener('scroll', onScroll);
+	}, [hasMore, loadingMore, loadMoreEmails]);
 
 	// Write iframe content when email changes
 	useEffect(() => {
@@ -213,6 +266,64 @@ export default function App() {
 
 		const container = cmContainerRef.current;
 
+		// ── Monkey-patch: yank always copies to system clipboard ──
+		if (!exDefined.current) {
+			exDefined.current = true;
+			try {
+				const rc = Vim.getRegisterController();
+				if (rc?.constructor?.prototype?.pushText) {
+					const orig = rc.constructor.prototype.pushText;
+					rc.constructor.prototype.pushText = function (
+						registerName: any,
+						operator: string,
+						text: string,
+						linewise: boolean,
+						blockwise: boolean,
+					) {
+						orig.call(this, registerName, operator, text, linewise, blockwise);
+						if (operator === 'yank' && text) {
+							navigator.clipboard.writeText(text);
+							// green flash feedback — find the active CM scroller
+							const scroller = document.querySelector('.cm-scroller');
+							if (scroller) {
+								scroller.classList.add('yanked');
+								setTimeout(() => scroller.classList.remove('yanked'), 400);
+							}
+						}
+					};
+				}
+			} catch { }
+
+			// ── Define :set ex commands ──
+			Vim.defineEx('set', 'se', (cm: any, params: any) => {
+				const view: EditorView | null = cm?.view;
+				if (!view) return;
+				const args: string[] = params?.args || [];
+				for (const arg of args) {
+					switch (arg) {
+						case 'wrap':
+							view.dispatch({ effects: wrapCompRef.current.reconfigure(EditorView.lineWrapping) });
+							break;
+						case 'nowrap':
+							view.dispatch({ effects: wrapCompRef.current.reconfigure([]) });
+							break;
+						case 'nu':
+						case 'number':
+							view.dispatch({ effects: numCompRef.current.reconfigure(lineNumbers()) });
+							break;
+						case 'nonu':
+						case 'nonumber':
+							view.dispatch({ effects: numCompRef.current.reconfigure([]) });
+							break;
+						default:
+							if (cm.state?.statusbar) {
+								cm.state.statusbar.textContent = `Unknown option: ${arg}`;
+							}
+					}
+				}
+			});
+		}
+
 		// Dark theme matching our palette
 		const darkTheme = EditorView.theme({
 			"&": {
@@ -220,7 +331,7 @@ export default function App() {
 				color: "#e4e4e7",
 				height: "100%",
 				fontSize: "13px",
-				fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", monospace',
+				fontFamily: '"Iosevka", "Cascadia Code", "Fira Code", "SF Mono", Menlo, Monaco, monospace',
 			},
 			"&.cm-focused": { outline: "none" },
 			".cm-cursor, .cm-dropCursor": { borderLeftColor: "#3b82f6" },
@@ -271,31 +382,9 @@ export default function App() {
 			doc: plainText,
 			extensions: [
 				darkTheme,
-				EditorView.lineWrapping,
+				wrapCompRef.current.of(EditorView.lineWrapping),
+				numCompRef.current.of([]),
 				drawSelection(),
-				// yank handler: copies to system clipboard BEFORE vim processes it.
-				// Returns false so vim also handles it (register mgmt, exit visual mode).
-				keymap.of([
-					{
-						key: "y",
-						run: (view) => {
-							const sel = view.state.selection.main;
-							if (sel.ranges.some(r => r.from < r.to)) {
-								const text = view.state.sliceDoc(sel.from, sel.to);
-								if (text) {
-									navigator.clipboard.writeText(text);
-									// flash feedback
-									const el = cmContainerRef.current;
-									if (el) {
-										el.classList.add('yanked');
-										setTimeout(() => el.classList.remove('yanked'), 400);
-									}
-								}
-							}
-							return false; // let vim handle it too (registers, exit visual mode)
-						},
-					},
-				]),
 				vim(),
 				keymap.of([
 					{
@@ -446,6 +535,7 @@ export default function App() {
 		setSelectedIdx(null);
 		setVisualMode(false);
 		setPlainText("");
+		setHasMore(true);
 		if (cmViewRef.current) { cmViewRef.current.destroy(); cmViewRef.current = null; }
 		fetchData(true);
 	};
@@ -577,6 +667,18 @@ export default function App() {
 										</button>
 									);
 								})}
+								{/* Infinite scroll sentinel */}
+								{loadingMore && (
+									<div className="flex items-center justify-center gap-1.5 px-4 py-4">
+										{[0, 1, 2].map(i => (
+											<span key={i} className="h-1 w-1 animate-bounce rounded-full bg-zinc-500" style={{ animationDelay: `${i * 0.15}s` }} />
+										))}
+										<span className="ml-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-600">Loading older…</span>
+									</div>
+								)}
+								{!hasMore && emails.length > 0 && (
+									<div className="px-4 py-4 text-center text-[10px] font-mono text-zinc-600">No more messages</div>
+								)}
 							</div>
 						</div>
 					)}
@@ -648,7 +750,7 @@ export default function App() {
 			{/* ── Status bar ── */}
 			<footer className="flex items-center justify-between border-t border-zinc-900 bg-black px-4 text-[10px] font-mono text-zinc-500">
 				<span className="flex items-center gap-2">
-					{error ? "⚠ disconnected" : emails.length > 0 ? `${emails.length} messages` : loading ? "connecting…" : "ready"}
+					{error ? "⚠ disconnected" : loading ? "connecting…" : loadingMore ? `⟳ loading more… (${emails.length})` : emails.length > 0 ? `${emails.length} messages` : "ready"}
 					{visualMode && focusedPanel === 'reader' && plainText && (
 						<span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-green-800/50 text-green-300">
 							-- VIM --

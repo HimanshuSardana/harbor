@@ -2,12 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+@import "@fontsource/iosevka/400.css";
+@import "@fontsource/iosevka/700.css";
+@import "@fontsource/iosevka/400-italic.css";
+
 :root {
   --foreground-rgb: 0, 0, 0;
   --background-rgb: 255, 255, 255;
 }
 
 body {
+  font-family: "Iosevka", "Menlo", "Monaco", "Cascadia Code", "SF Mono", "Fira Code", "JetBrains Mono", monospace;
   color: rgb(var(--foreground-rgb));
   background: rgb(var(--background-rgb));
 }
