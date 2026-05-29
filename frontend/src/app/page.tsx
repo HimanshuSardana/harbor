@@ -4,18 +4,19 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
 import { Vim, vim } from "@replit/codemirror-vim";
-
-const API_BASE = "http://localhost:3002";
+import { fetchEmails, fetchAccounts } from "@/lib/tauri-api";
 
 type Email = {
 	subject: string;
-	from: string;
+	from_addr: string;
 	date: string;
-	body?: string;
+	body_text?: string;
+	body_html?: string;
+	id?: number;
+	mailbox?: string;
 };
 
 type Account = {
-	name: string;
 	email: string;
 };
 
@@ -33,13 +34,15 @@ function formatDate(raw: string) {
 	return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
-function extractName(from: string) {
+function extractName(from: string | undefined | null) {
+	if (!from) return "?";
 	const match = from.match(/^"?(.+?)"?\s*</);
 	if (match) return match[1].trim();
 	return from.split("@")[0];
 }
 
-function extractDomain(from: string) {
+function extractDomain(from: string | undefined | null) {
+	if (!from) return "";
 	const match = from.match(/@([^>]+)>?/);
 	return match ? match[1] : "";
 }
@@ -58,7 +61,7 @@ function cleanBodyHtml(raw: string): string {
 }
 
 function buildIframeDoc(email: Email): string {
-	const rawBody = email.body || "<p><em>No body content</em></p>";
+	const rawBody = email.body_html || email.body_text || "<p><em>No body content</em></p>";
 	const cleaned = cleanBodyHtml(rawBody);
 
 	if (/<html[\s>]/i.test(cleaned)) {
@@ -108,8 +111,8 @@ function stripHtml(html: string): string {
 		.trim();
 }
 
-function bodyPreview(html: string | undefined, maxLen = 80): string {
-	if (!html) return "";
+function bodyPreview(email: Email, maxLen = 80): string {
+	const html = email.body_html || email.body_text || "";
 	const text = stripHtml(html);
 	if (text.length <= maxLen) return text;
 	return text.slice(0, maxLen).replace(/\s+\S*$/, "") + "…";
@@ -120,7 +123,7 @@ function bodyPreview(html: string | undefined, maxLen = 80): string {
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function App() {
-	const PAGE_SIZE = 5;
+	const PAGE_SIZE = 50;
 
 	const [emails, setEmails] = useState<Email[]>([]);
 	const [accounts, setAccounts] = useState<Account[]>([]);
@@ -149,6 +152,13 @@ export default function App() {
 	const [isDragging1, setIsDragging1] = useState(false);
 	const [isDragging2, setIsDragging2] = useState(false);
 	const [isMobile, setIsMobile] = useState(false);
+	// ── Command Palette ──
+	const [paletteOpen, setPaletteOpen] = useState(false);
+	const [paletteQuery, setPaletteQuery] = useState("");
+	const paletteRef = useRef<HTMLInputElement | null>(null);
+	const paletteIdxRef = useRef(0);
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [theme, setTheme] = useState<'default' | 'catppuccin'>('default');
 
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
@@ -167,22 +177,24 @@ export default function App() {
 		offsetRef.current = 0;
 		// Always fetch accounts alongside the first emails request.
 		try {
-			const [emailsRes, accountsRes] = await Promise.all([
-				fetch(`${API_BASE}/api/emails?limit=${PAGE_SIZE}`),
-				fetch(`${API_BASE}/api/accounts`),
-			]);
-			if (!emailsRes.ok) throw new Error(`Emails API: ${emailsRes.status}`);
-			if (!accountsRes.ok) throw new Error(`Accounts API: ${accountsRes.status}`);
 			const [emailsData, accountsData] = await Promise.all([
-				emailsRes.json(),
-				accountsRes.json(),
+				fetchEmails(PAGE_SIZE, 0),
+				fetchAccounts(),
 			]);
-			// API returns oldest-first within the most-recent batch.
-			// Reverse so newest appears at top of the list.
-			const sorted = [...emailsData].reverse();
-			setEmails(sorted);
+			// Tauri API / SQLite returns newest-first already, no .reverse() needed.
+			// HTTP fallback reverses internally.
+			setEmails(emailsData);
 			setAccounts(accountsData);
-			setHasMore(emailsData.length === PAGE_SIZE);
+			// If running in Tauri, check total count to determine hasMore
+			const total = typeof window !== "undefined" && "__TAURI__" in window
+				? await (await import("@/lib/tauri-api")).fetchTotalEmailCount()
+				: 0;
+			if (total > 0) {
+				setHasMore(emailsData.length < total);
+				offsetRef.current = emailsData.length;
+			} else {
+				setHasMore(emailsData.length === PAGE_SIZE);
+			}
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : "Unknown error";
 			setError(msg);
@@ -200,16 +212,22 @@ export default function App() {
 		setLoadingMore(true);
 		try {
 			const offset = offsetRef.current;
-			const res = await fetch(`${API_BASE}/api/emails?limit=${PAGE_SIZE}&offset=${offset}`);
-			if (!res.ok) throw new Error(`Emails API: ${res.status}`);
-			const data: Email[] = await res.json();
-			if (data.length < PAGE_SIZE) setHasMore(false);
+			const data = await fetchEmails(PAGE_SIZE, offset);
+			// Tauri API returns newest-first already (SQLite ORDER BY id DESC).
+			// HTTP fallback reverses internally.
+			// No reverse needed here — just append.
 			if (data.length > 0) {
-				// Reverse each batch so newest appears first within the batch,
-				// then append so the list stays newest→oldest top→bottom.
-				setEmails(prev => [...prev, ...data.reverse()]);
+				setEmails(prev => [...prev, ...data]);
 				offsetRef.current = offset + data.length;
+				// Check total to determine if there's more
+				const total = typeof window !== "undefined" && "__TAURI__" in window
+					? await (await import("@/lib/tauri-api")).fetchTotalEmailCount()
+					: 0;
+				if (total > 0) {
+					setHasMore(offset + data.length < total);
+				}
 			}
+			if (data.length < PAGE_SIZE) setHasMore(false);
 		} catch {
 			// silently swallow load-more errors
 		} finally {
@@ -236,7 +254,7 @@ export default function App() {
 	useEffect(() => {
 		if (selectedIdx !== null && emails[selectedIdx]) {
 			const email = emails[selectedIdx];
-			if (iframeRef.current && email.body) {
+			if (iframeRef.current && (email.body_html || email.body_text)) {
 				const doc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
 				if (doc) {
 					doc.open();
@@ -274,7 +292,7 @@ export default function App() {
 				const rc = Vim.getRegisterController();
 				if (rc?.constructor?.prototype?.pushText) {
 					const orig = rc.constructor.prototype.pushText;
-					rc.constructor.prototype.pushText = function (
+					rc.constructor.prototype.pushText = function(
 						registerName: any,
 						operator: string,
 						text: string,
@@ -515,9 +533,9 @@ export default function App() {
 					break;
 
 				case 'v':
-					if (focusedPanel === 'reader' && selectedIdx !== null && emails[selectedIdx]?.body) {
+					if (focusedPanel === 'reader' && selectedIdx !== null && (emails[selectedIdx]?.body_html || emails[selectedIdx]?.body_text)) {
 						e.preventDefault();
-						const text = stripHtml(emails[selectedIdx].body || "");
+						const text = stripHtml(emails[selectedIdx].body_html || emails[selectedIdx].body_text || "");
 						if (text.trim()) {
 							setPlainText(text);
 							setVisualMode(true);
@@ -536,7 +554,7 @@ export default function App() {
 
 		window.addEventListener('keydown', handleKeyDown);
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [focusedPanel, visualMode, emails, selectedIdx, plainText]);
+	}, [focusedPanel, visualMode, emails, selectedIdx, plainText, paletteOpen]);
 
 	// ── Resizers ──
 	const startDragging1 = (e: React.MouseEvent) => {
@@ -574,19 +592,13 @@ export default function App() {
 	const selectedEmail = selectedIdx !== null ? emails[selectedIdx] : null;
 	const isDraggingAny = isDragging1 || isDragging2;
 
-	// ── Command Palette ──
-	const [paletteOpen, setPaletteOpen] = useState(false);
-	const [paletteQuery, setPaletteQuery] = useState("");
-	const paletteRef = useRef<HTMLInputElement | null>(null);
-	const paletteIdxRef = useRef(0);
-
 	const COMMANDS = [
-		{ id: "settings", label: "Settings", execute: () => { } },
+		{ id: "settings", label: "Settings", execute: () => setSettingsOpen(true) },
 	];
 
 	return (
-		<main
-			className="grid h-screen w-screen overflow-hidden bg-black text-zinc-100 select-none"
+		<div
+			className={`grid h-screen w-screen overflow-hidden bg-black text-zinc-100 select-none ${theme === 'catppuccin' ? 'catppuccin' : ''}`}
 			style={{ gridTemplateRows: "48px 1fr 32px" }}
 		>
 			{/* ── Title bar ── */}
@@ -645,15 +657,17 @@ export default function App() {
 								<div className="flex items-center justify-between px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-zinc-500">
 									<span>Accounts</span>
 								</div>
-								{accounts.map((acc) => (
-									<div key={acc.email} className="flex items-center gap-2.5 px-4 py-3 text-xs transition bg-black hover:bg-zinc-950/60">
-										<span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-zinc-800 text-[8px] font-bold text-zinc-400">{acc.name[0]?.toUpperCase()}</span>
-										<div className="truncate min-w-0">
-											<p className="text-zinc-300 truncate">{acc.name}</p>
-											<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
+								{accounts.map((acc) => {
+									const name = acc.email.split("@")[0];
+									return (
+										<div key={acc.email} className="flex items-center gap-2.5 px-4 py-3 text-xs transition bg-black hover:bg-zinc-950/60">
+											<span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-zinc-800 text-[8px] font-bold text-zinc-400">{name[0]?.toUpperCase()}</span>
+											<div className="truncate min-w-0">
+												<p className="text-zinc-300 truncate">{name}</p>
+												<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
 										</div>
 									</div>
-								))}
+								);})}
 							</div>
 						)}
 					</div>
@@ -704,11 +718,11 @@ export default function App() {
 											<div className="flex items-start justify-between gap-3">
 												<div className="min-w-0 flex-1">
 													<div className="flex items-center gap-2">
-														<span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded text-[8px] font-bold ${unread ? "bg-white text-black" : "bg-zinc-800 text-zinc-400"}`}>{extractName(email.from)[0]?.toUpperCase() || "?"}</span>
-														<span className={`truncate text-xs ${unread ? "font-bold text-white" : "text-zinc-300"}`}>{extractName(email.from)}</span>
+														<span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded text-[8px] font-bold ${unread ? "bg-white text-black" : "bg-zinc-800 text-zinc-400"}`}>{extractName(email.from_addr)[0]?.toUpperCase() || "?"}</span>
+														<span className={`truncate text-xs ${unread ? "font-bold text-white" : "text-zinc-300"}`}>{extractName(email.from_addr)}</span>
 													</div>
 													<p className={`mt-1.5 truncate text-[11px] ${unread ? "font-semibold text-white" : "text-zinc-400"}`}>{email.subject}</p>
-													{email.body && <p className="mt-1 truncate text-[10px] text-zinc-500">{bodyPreview(email.body, 70)}</p>}
+													{bodyPreview(email) && <p className="mt-1 truncate text-[10px] text-zinc-500">{bodyPreview(email, 70)}</p>}
 												</div>
 												<span className="shrink-0 pt-0.5 text-[9px] font-mono text-zinc-500 tabular-nums">{formatDate(email.date)}</span>
 											</div>
@@ -756,7 +770,7 @@ export default function App() {
 								<div className="flex flex-col gap-1 pt-1 text-[11px]">
 									<div className="flex items-center gap-2">
 										<span className="w-12 text-zinc-500 font-mono">From</span>
-										<span className="text-zinc-300 break-all">{selectedEmail.from}</span>
+										<span className="text-zinc-300 break-all">{selectedEmail.from_addr}</span>
 									</div>
 									<div className="flex items-center gap-2">
 										<span className="w-12 text-zinc-500 font-mono">To</span>
@@ -769,7 +783,7 @@ export default function App() {
 							<div className="flex-1 bg-black">
 								{visualMode && focusedPanel === 'reader' && plainText ? (
 									<div ref={cmContainerRef} className="h-full w-full overflow-hidden" />
-								) : selectedEmail.body ? (
+								) : selectedEmail.body_html || selectedEmail.body_text ? (
 									<iframe
 										ref={iframeRef}
 										sandbox="allow-same-origin"
@@ -812,6 +826,181 @@ export default function App() {
 				</span>
 				<span>{accounts.length > 0 ? accounts[0].email : "no account connected"} · port 3002</span>
 			</footer>
-		</main>
+
+			{/* ── Command Palette Overlay ── */}
+			{paletteOpen && (
+				<div
+					className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+					onClick={() => setPaletteOpen(false)}
+				>
+					{/* Backdrop */}
+					<div className="absolute inset-0 bg-black/60" />
+					{/* Palette */}
+					<div
+						className="relative w-full max-w-lg rounded-lg border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/60 overflow-hidden"
+						onClick={e => e.stopPropagation()}
+					>
+						<div className="flex items-center border-b border-zinc-800 px-4">
+							<svg className="h-4 w-4 shrink-0 text-zinc-500" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+								<path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+							</svg>
+							<input
+								ref={paletteRef}
+								type="text"
+								value={paletteQuery}
+								onChange={e => {
+									setPaletteQuery(e.target.value);
+									paletteIdxRef.current = 0;
+								}}
+								onKeyDown={e => {
+									const filtered = COMMANDS.filter(c =>
+										c.label.toLowerCase().includes(paletteQuery.toLowerCase())
+									);
+									switch (e.key) {
+										case 'ArrowDown':
+											e.preventDefault();
+											paletteIdxRef.current = Math.min(
+												paletteIdxRef.current + 1,
+												filtered.length - 1
+											);
+											break;
+										case 'ArrowUp':
+											e.preventDefault();
+											paletteIdxRef.current = Math.max(
+												paletteIdxRef.current - 1,
+												0
+											);
+											break;
+										case 'Enter':
+											e.preventDefault();
+											if (filtered[paletteIdxRef.current]) {
+												filtered[paletteIdxRef.current].execute();
+												setPaletteOpen(false);
+											}
+											break;
+										case 'Escape':
+											e.preventDefault();
+											setPaletteOpen(false);
+											break;
+									}
+								}}
+								placeholder="Type a command…"
+								className="w-full bg-transparent px-3 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none"
+								autoFocus
+							/>
+						</div>
+						<div className="max-h-64 overflow-y-auto py-1">
+							{COMMANDS.filter(c =>
+								c.label.toLowerCase().includes(paletteQuery.toLowerCase())
+							).length === 0 ? (
+								<div className="px-4 py-6 text-center text-xs text-zinc-600 font-mono">
+									No matching commands
+								</div>
+							) : (
+								COMMANDS.filter(c =>
+									c.label.toLowerCase().includes(paletteQuery.toLowerCase())
+								).map((cmd, i) => {
+									const selected = i === paletteIdxRef.current;
+									const idx = cmd.label.toLowerCase().indexOf(
+										paletteQuery.toLowerCase()
+									);
+									return (
+										<button
+											key={cmd.id}
+											className={`w-full px-4 py-2.5 text-left text-xs transition flex items-center gap-3 ${selected ? "bg-zinc-800 text-white" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"}`}
+											onClick={() => {
+												cmd.execute();
+												setPaletteOpen(false);
+											}}
+											onMouseEnter={() => (paletteIdxRef.current = i)}
+										>
+											<svg className="h-3.5 w-3.5 shrink-0 text-zinc-500" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+												<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+											</svg>
+											<span>
+												{idx >= 0 && paletteQuery ? (
+													<>
+														{cmd.label.slice(0, idx)}
+														<span className="text-blue-400 underline decoration-blue-400/50">
+															{cmd.label.slice(idx, idx + paletteQuery.length)}
+														</span>
+														{cmd.label.slice(idx + paletteQuery.length)}
+													</>
+												) : (
+													cmd.label
+												)}
+											</span>
+										</button>
+									);
+								})
+							)}
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* ── Settings Modal ── */}
+			{settingsOpen && (
+				<div
+					className="fixed inset-0 z-50 flex items-center justify-center"
+					onClick={() => setSettingsOpen(false)}
+				>
+					<div className="absolute inset-0 bg-black/60" />
+					<div
+						className="relative w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-950 p-6 shadow-2xl shadow-black/60"
+						onClick={e => e.stopPropagation()}
+					>
+						<div className="flex items-center justify-between mb-5">
+							<h2 className="text-sm font-bold text-white tracking-tight">Settings</h2>
+							<button onClick={() => setSettingsOpen(false)} className="text-zinc-500 hover:text-zinc-300 transition">
+								<svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+									<path d="M6 18L18 6M6 6l12 12" />
+								</svg>
+							</button>
+						</div>
+
+						<p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-3">Theme</p>
+						<div className="grid grid-cols-2 gap-3">
+							{/* Default theme */}
+							<button
+								onClick={() => setTheme('default')}
+								className={`rounded-lg border p-4 text-left transition ${theme === 'default' ? 'border-zinc-500 bg-zinc-900' : 'border-zinc-800 bg-zinc-950 hover:border-zinc-600'}`}
+							>
+								<div className="flex items-center gap-2 mb-2">
+									<div className="h-3 w-3 rounded-full bg-black border border-zinc-600" />
+									<span className={`text-xs font-medium ${theme === 'default' ? 'text-white' : 'text-zinc-300'}`}>Default</span>
+								</div>
+								<div className="flex gap-1">
+									<span className="h-1.5 w-5 rounded bg-zinc-800" />
+									<span className="h-1.5 w-3 rounded bg-zinc-700" />
+									<span className="h-1.5 w-4 rounded bg-blue-500/50" />
+								</div>
+							</button>
+							{/* Catppuccin Mocha */}
+							<button
+								onClick={() => setTheme('catppuccin')}
+								className={`rounded-lg border p-4 text-left transition ${theme === 'catppuccin' ? 'border-zinc-500 bg-zinc-900' : 'border-zinc-800 bg-zinc-950 hover:border-zinc-600'}`}
+							>
+								<div className="flex items-center gap-2 mb-2">
+									<div className="h-3 w-3 rounded-full" style={{ backgroundColor: '#1e1e2e', border: '1px solid #45475a' }} />
+									<span className={`text-xs font-medium ${theme === 'catppuccin' ? 'text-white' : 'text-zinc-300'}`}>Catppuccin Mocha</span>
+								</div>
+								<div className="flex gap-1">
+									<span className="h-1.5 w-5 rounded" style={{ backgroundColor: '#313244' }} />
+									<span className="h-1.5 w-3 rounded" style={{ backgroundColor: '#45475a' }} />
+									<span className="h-1.5 w-4 rounded" style={{ backgroundColor: '#89b4fa' }} />
+								</div>
+							</button>
+						</div>
+
+						<p className="text-[10px] text-zinc-600 mt-4 leading-relaxed">
+							{theme === 'catppuccin'
+								? 'Catppuccin Mocha theme active — warm latte-inspired dark tones with pastel accents.'
+								: 'Dark terminal theme with blue accent — the default Harbor look.'}
+						</p>
+					</div>
+				</div>
+			)}
+		</div>
 	);
 }

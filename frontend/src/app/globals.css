@@ -17,6 +17,38 @@ body {
   background: rgb(var(--background-rgb));
 }
 
+/* ── Catppuccin Mocha theme ── */
+.catppuccin {
+  --bg-base: #1e1e2e;
+  --bg-surface: #181825;
+  --bg-overlay: #313244;
+  --bg-mantle: #11111b;
+  --text: #cdd6f4;
+  --text-dim: #a6adc8;
+  --text-muted: #6c7086;
+  --border: #45475a;
+  --accent: #89b4fa;
+  --accent-soft: #89b4fa80;
+}
+.catppuccin .bg-black { background-color: var(--bg-base) !important; }
+.catppuccin .bg-zinc-950 { background-color: var(--bg-surface) !important; }
+.catppuccin .bg-zinc-900 { background-color: var(--bg-overlay) !important; }
+.catppuccin .bg-zinc-800 { background-color: #45475a !important; }
+.catppuccin .text-zinc-100 { color: var(--text) !important; }
+.catppuccin .text-zinc-300 { color: var(--text-dim) !important; }
+.catppuccin .text-zinc-400 { color: var(--text-dim) !important; }
+.catppuccin .text-zinc-500 { color: var(--text-muted) !important; }
+.catppuccin .text-zinc-600 { color: var(--text-muted) !important; }
+.catppuccin .border-zinc-800 { border-color: var(--border) !important; }
+.catppuccin .border-zinc-900 { border-color: var(--border) !important; }
+.catppuccin .ring-zinc-600 { --tw-ring-color: var(--accent) !important; }
+.catppuccin .hover\:bg-zinc-950\/60:hover { background-color: color-mix(in srgb, var(--bg-surface) 60%, transparent) !important; }
+.catppuccin .hover\:bg-zinc-950:hover { background-color: var(--bg-surface) !important; }
+.catppuccin .hover\:bg-zinc-900:hover { background-color: var(--bg-overlay) !important; }
+.catppuccin .hover\:border-zinc-600:hover { border-color: var(--accent) !important; }
+.catppuccin .bg-blue-600 { background-color: var(--accent) !important; }
+.catppuccin .text-blue-400 { color: var(--accent) !important; }
+
 /* Yanked flash feedback for vim yank (copy) */
 @keyframes yank-flash {
   0%   { background-color: rgba(34, 197, 94, 0.15); }
