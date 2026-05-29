@@ -62,6 +62,72 @@ func BuildDocsSpec() map[string]interface{} {
 					},
 				},
 			},
+			"/api/search": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary":     "Full-text search emails",
+					"description": "Searches cached emails using FTS5 full-text search. Supports FTS5 query syntax: phrases, AND, OR, NOT, prefix, and field-specific queries like `subject:meeting`.",
+					"operationId": "searchEmails",
+					"tags":        []string{"Search"},
+					"parameters": []map[string]interface{}{
+						{
+							"name":        "q",
+							"in":          "query",
+							"description": "Full-text search query (FTS5 syntax).",
+							"required":    true,
+							"schema": map[string]interface{}{"type": "string"},
+						},
+						{
+							"name":        "limit",
+							"in":          "query",
+							"description": "Max results (default 20, max 100).",
+							"required":    false,
+							"schema": map[string]interface{}{
+								"type":    "integer",
+								"default": 20,
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "Matching emails.",
+							"content": map[string]interface{}{
+								"application/json": map[string]interface{}{
+									"schema": map[string]interface{}{
+										"type":  "array",
+										"items": map[string]interface{}{"$ref": "#/components/schemas/Email"},
+									},
+								},
+							},
+						},
+						"400": map[string]interface{}{
+							"description": "Missing ?q parameter.",
+						},
+					},
+				},
+			},
+			"/api/sync": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary":     "Trigger IMAP sync",
+					"description": "Triggers an immediate background sync from the IMAP server. New emails are written to the local maildir and indexed.",
+					"operationId": "syncNow",
+					"tags":        []string{"System"},
+					"responses": map[string]interface{}{
+						"202": map[string]interface{}{
+							"description": "Sync started.",
+							"content": map[string]interface{}{
+								"application/json": map[string]interface{}{
+									"schema": map[string]interface{}{
+										"type": "object",
+										"properties": map[string]interface{}{
+											"status": map[string]interface{}{"type": "string"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 			"/api/emails": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Fetch recent emails",
@@ -158,12 +224,28 @@ func BuildDocsSpec() map[string]interface{} {
 				"Email": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":    "integer",
+							"example": 1,
+						},
+						"mailbox": map[string]interface{}{
+							"type":    "string",
+							"example": "user@gmail.com",
+						},
+						"imap_uid": map[string]interface{}{
+							"type":    "integer",
+							"example": 42,
+						},
+						"filename": map[string]interface{}{
+							"type":    "string",
+							"example": "1745894400.a1b2c3.0:2,S",
+						},
 						"subject": map[string]interface{}{
 							"type":        "string",
 							"description": "Subject line of the email.",
 							"example":     "Hello from Harbor",
 						},
-						"from": map[string]interface{}{
+						"from_addr": map[string]interface{}{
 							"type":        "string",
 							"description": "Sender address.",
 							"example":     "sender@example.com",
@@ -174,10 +256,19 @@ func BuildDocsSpec() map[string]interface{} {
 							"description": "Date the email was sent.",
 							"example":     "2025-05-29T12:00:00Z",
 						},
-						"body": map[string]interface{}{
+						"body_text": map[string]interface{}{
 							"type":        "string",
-							"description": "HTML body content (or plain text fallback) of the email.",
+							"description": "Plain-text body (decoded).",
+						},
+						"body_html": map[string]interface{}{
+							"type":        "string",
+							"description": "HTML body (decoded).",
 							"example":     "<html><body><p>Hello from Harbor</p></body></html>",
+						},
+						"flags": map[string]interface{}{
+							"type":        "string",
+							"description": "Maildir-style flags (S=Seen, F=Flagged, etc.).",
+							"example":     "S",
 						},
 					},
 				},
