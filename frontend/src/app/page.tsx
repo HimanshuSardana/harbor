@@ -419,6 +419,28 @@ export default function App() {
 			const tag = (e.target as HTMLElement).tagName;
 			if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
+			// ── Command Palette (Ctrl+Shift+P) ──
+			if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
+				e.preventDefault();
+				if (paletteOpen) {
+					setPaletteOpen(false);
+				} else {
+					setPaletteQuery("");
+					paletteIdxRef.current = 0;
+					setPaletteOpen(true);
+				}
+				return;
+			}
+
+			// If palette is open, handle Escape to close
+			if (paletteOpen) {
+				if (e.key === 'Escape') {
+					e.preventDefault();
+					setPaletteOpen(false);
+				}
+				return;
+			}
+
 			// When Visual Mode is active, CodeMirror handles all vim keys internally.
 			// We only intercept global navigation keys (2, 3) here.
 			if (visualMode && focusedPanel === 'reader') {
@@ -486,8 +508,9 @@ export default function App() {
 				case 'Enter':
 					if (focusedPanel === 'list' && selectedIdx !== null) {
 						e.preventDefault();
-						const btn = listRef.current?.querySelector(`[data-idx="${selectedIdx}"]`) as HTMLElement | null;
-						btn?.scrollIntoView({ block: 'nearest' });
+						setVisualMode(false);
+						setPlainText("");
+						setFocusedPanel('reader');
 					}
 					break;
 
@@ -551,7 +574,15 @@ export default function App() {
 	const selectedEmail = selectedIdx !== null ? emails[selectedIdx] : null;
 	const isDraggingAny = isDragging1 || isDragging2;
 
+	// ── Command Palette ──
+	const [paletteOpen, setPaletteOpen] = useState(false);
+	const [paletteQuery, setPaletteQuery] = useState("");
+	const paletteRef = useRef<HTMLInputElement | null>(null);
+	const paletteIdxRef = useRef(0);
 
+	const COMMANDS = [
+		{ id: "settings", label: "Settings", execute: () => { } },
+	];
 
 	return (
 		<main
@@ -590,31 +621,35 @@ export default function App() {
 					className={`hidden md:block overflow-hidden bg-black shrink-0 transition-[width] duration-200 ease-in-out ${sidebarOpen ? "border-r border-zinc-900" : "border-r-0"}`}
 					style={{ width: isMobile ? '0px' : sidebarOpen ? `${col1Width}px` : '0px' }}
 				>
-					<div className="flex h-full flex-col p-3">
-						<div className="mb-4 flex items-center justify-between rounded bg-zinc-950 px-3 py-2 border border-zinc-900">
-							<span className="text-xs font-semibold tracking-wide text-zinc-300">Inbox</span>
-							<span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-mono text-zinc-300">{emails.length}</span>
+					<div className="flex h-full flex-col">
+						<div className="flex items-center justify-between border-b border-zinc-900 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-zinc-500">
+							<span>Folders</span>
+							<span>{emails.length}</span>
 						</div>
-						<nav className="flex-1 space-y-1 overflow-y-auto">
+						<nav className="flex-1 overflow-y-auto divide-y divide-zinc-900/60">
 							{[
 								{ label: "All Mail", icon: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z", active: true },
 								{ label: "Unread", icon: "M12 19l9 2-9-18-9 18 9-2zm0 0v-8", active: false },
 								{ label: "Important", icon: "M12 9v2m0 4h.01M12 3l9.66 5.33v5.34L12 21l-9.66-5.33V8.33L12 3z", active: false },
 							].map((item) => (
-								<button key={item.label} className={`flex w-full items-center gap-2.5 rounded px-3 py-1.5 text-left text-xs transition ${item.active ? "bg-zinc-900 text-white font-medium border-l-2 border-white" : "text-zinc-400 hover:bg-zinc-950 hover:text-zinc-200"}`}>
-									<svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path d={item.icon} /></svg>
-									{item.label}
+								<button key={item.label} className={`w-full px-4 py-3 text-left transition ${item.active ? "bg-zinc-900 ring-1 ring-inset ring-zinc-600" : "bg-black hover:bg-zinc-950/60"}`}>
+									<div className="flex items-center gap-2.5">
+										<svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path d={item.icon} /></svg>
+										<span className={`truncate text-xs ${item.active ? "font-medium text-white" : "text-zinc-300"}`}>{item.label}</span>
+									</div>
 								</button>
 							))}
 						</nav>
 						{accounts.length > 0 && (
-							<div className="mt-auto border-t border-zinc-900 pt-5">
-								<p className="mb-3 px-3 text-[10px] uppercase tracking-wider font-bold text-zinc-600">Accounts</p>
+							<div className="border-t border-zinc-900">
+								<div className="flex items-center justify-between px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-zinc-500">
+									<span>Accounts</span>
+								</div>
 								{accounts.map((acc) => (
-									<div key={acc.email} className="flex items-center gap-2.5 rounded px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-950">
-										<span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-zinc-900 text-[10px] font-bold text-zinc-300 border border-zinc-800">{acc.name[0]?.toUpperCase()}</span>
-										<div className="truncate">
-											<p className="text-zinc-300 font-medium truncate">{acc.name}</p>
+									<div key={acc.email} className="flex items-center gap-2.5 px-4 py-3 text-xs transition bg-black hover:bg-zinc-950/60">
+										<span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-zinc-800 text-[8px] font-bold text-zinc-400">{acc.name[0]?.toUpperCase()}</span>
+										<div className="truncate min-w-0">
+											<p className="text-zinc-300 truncate">{acc.name}</p>
 											<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
 										</div>
 									</div>
