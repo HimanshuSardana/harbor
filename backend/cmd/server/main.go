@@ -26,6 +26,8 @@ func main() {
 	mux.HandleFunc("GET /api/accounts", h.GetAccounts)
 	mux.HandleFunc("GET /api/emails", h.GetEmails)
 
+	h.RegisterDocs(mux)
+
 	handler := api.CORS(mux)
 
 	addr := ":" + port
