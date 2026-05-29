@@ -144,6 +144,7 @@ export default function App() {
 
 	// Resizing States
 	const [col1Width, setCol1Width] = useState(240);
+	const [sidebarOpen, setSidebarOpen] = useState(true);
 	const [col2Width, setCol2Width] = useState(360);
 	const [isDragging1, setIsDragging1] = useState(false);
 	const [isDragging2, setIsDragging2] = useState(false);
@@ -441,6 +442,13 @@ export default function App() {
 				return;
 			}
 
+			// ── Ctrl+B: toggle sidebar ──
+			if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+				e.preventDefault();
+				setSidebarOpen(p => !p);
+				return;
+			}
+
 			switch (e.key) {
 				case '2':
 					e.preventDefault();
@@ -577,38 +585,43 @@ export default function App() {
 			{/* ── 3 Column Workplace ── */}
 			<div className="flex h-full w-full overflow-hidden">
 
-				{/* ── Column 1: Sidebar ── */}
-				<aside className="hidden md:block overflow-y-auto bg-black p-3 shrink-0" style={isMobile ? {} : { width: `${col1Width}px` }}>
-					<div className="mb-4 flex items-center justify-between rounded bg-zinc-950 px-3 py-2 border border-zinc-900">
-						<span className="text-xs font-semibold tracking-wide text-zinc-300">Inbox</span>
-						<span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-mono text-zinc-300">{emails.length}</span>
-					</div>
-					<nav className="space-y-1">
-						{[
-							{ label: "All Mail", icon: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z", active: true },
-							{ label: "Unread", icon: "M12 19l9 2-9-18-9 18 9-2zm0 0v-8", active: false },
-							{ label: "Important", icon: "M12 9v2m0 4h.01M12 3l9.66 5.33v5.34L12 21l-9.66-5.33V8.33L12 3z", active: false },
-						].map((item) => (
-							<button key={item.label} className={`flex w-full items-center gap-2.5 rounded px-3 py-1.5 text-left text-xs transition ${item.active ? "bg-zinc-900 text-white font-medium border-l-2 border-white" : "text-zinc-400 hover:bg-zinc-950 hover:text-zinc-200"}`}>
-								<svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path d={item.icon} /></svg>
-								{item.label}
-							</button>
-						))}
-					</nav>
-					{accounts.length > 0 && (
-						<div className="mt-8 border-t border-zinc-900 pt-5">
-							<p className="mb-3 px-3 text-[10px] uppercase tracking-wider font-bold text-zinc-600">Accounts</p>
-							{accounts.map((acc) => (
-								<div key={acc.email} className="flex items-center gap-2.5 rounded px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-950">
-									<span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-zinc-900 text-[10px] font-bold text-zinc-300 border border-zinc-800">{acc.name[0]?.toUpperCase()}</span>
-									<div className="truncate">
-										<p className="text-zinc-300 font-medium truncate">{acc.name}</p>
-										<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
-									</div>
-								</div>
-							))}
+				{/* ── Column 1: Sidebar (collapsible with Ctrl+B) ── */}
+				<aside
+					className={`hidden md:block overflow-hidden bg-black shrink-0 transition-[width] duration-200 ease-in-out ${sidebarOpen ? "border-r border-zinc-900" : "border-r-0"}`}
+					style={{ width: isMobile ? '0px' : sidebarOpen ? `${col1Width}px` : '0px' }}
+				>
+					<div className="flex h-full flex-col p-3">
+						<div className="mb-4 flex items-center justify-between rounded bg-zinc-950 px-3 py-2 border border-zinc-900">
+							<span className="text-xs font-semibold tracking-wide text-zinc-300">Inbox</span>
+							<span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-mono text-zinc-300">{emails.length}</span>
 						</div>
-					)}
+						<nav className="flex-1 space-y-1 overflow-y-auto">
+							{[
+								{ label: "All Mail", icon: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z", active: true },
+								{ label: "Unread", icon: "M12 19l9 2-9-18-9 18 9-2zm0 0v-8", active: false },
+								{ label: "Important", icon: "M12 9v2m0 4h.01M12 3l9.66 5.33v5.34L12 21l-9.66-5.33V8.33L12 3z", active: false },
+							].map((item) => (
+								<button key={item.label} className={`flex w-full items-center gap-2.5 rounded px-3 py-1.5 text-left text-xs transition ${item.active ? "bg-zinc-900 text-white font-medium border-l-2 border-white" : "text-zinc-400 hover:bg-zinc-950 hover:text-zinc-200"}`}>
+									<svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path d={item.icon} /></svg>
+									{item.label}
+								</button>
+							))}
+						</nav>
+						{accounts.length > 0 && (
+							<div className="mt-auto border-t border-zinc-900 pt-5">
+								<p className="mb-3 px-3 text-[10px] uppercase tracking-wider font-bold text-zinc-600">Accounts</p>
+								{accounts.map((acc) => (
+									<div key={acc.email} className="flex items-center gap-2.5 rounded px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-950">
+										<span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-zinc-900 text-[10px] font-bold text-zinc-300 border border-zinc-800">{acc.name[0]?.toUpperCase()}</span>
+										<div className="truncate">
+											<p className="text-zinc-300 font-medium truncate">{acc.name}</p>
+											<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
+										</div>
+									</div>
+								))}
+							</div>
+						)}
+					</div>
 				</aside>
 
 				{/* ── Resizer 1 ── */}
