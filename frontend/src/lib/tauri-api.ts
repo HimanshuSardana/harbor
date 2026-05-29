@@ -3,7 +3,7 @@
  * This lets the app run both inside Tauri (desktop) and in a browser (dev mode).
  */
 
-import type { Email, Account } from "@/app/page";
+import type { Email, Account } from "@/lib/types";
 
 // Detect Tauri runtime (desktop) vs browser (dev)
 function isTauri(): boolean {

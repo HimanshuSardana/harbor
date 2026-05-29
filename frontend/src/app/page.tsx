@@ -118,6 +118,34 @@ function bodyPreview(email: Email, maxLen = 80): string {
 	return text.slice(0, maxLen).replace(/\s+\S*$/, "") + "…";
 }
 
+function searchEmails(emails: Email[], query: string) {
+	if (!query || !query.trim()) return emails;
+	const searchQuery = query.toLowerCase();
+	return emails.filter(email => {
+		return (
+			email.subject.toLowerCase().includes(searchQuery) ||
+			email.from_addr.toLowerCase().includes(searchQuery) ||
+			(email.body_html && email.body_html.toLowerCase().includes(searchQuery)) ||
+			(email.body_text && email.body_text.toLowerCase().includes(searchQuery))
+		);
+	});
+}
+
+function highlightText(text: string, query: string): React.ReactNode {
+	if (!query) return text;
+	const regex = new RegExp(`(${escapeRegExp(query)})`, 'gi');
+	const parts = text.split(regex);
+	return parts.map((part, i) =>
+		regex.test(part) ?
+			<span key={i} className="bg-yellow-500/20 text-yellow-400 font-medium">{part}</span> :
+			part
+	);
+}
+
+function escapeRegExp(string: string): string {
+	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 
 
 // ─── Main Component ─────────────────────────────────────────────────────────
@@ -159,10 +187,29 @@ export default function App() {
 	const paletteIdxRef = useRef(0);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [theme, setTheme] = useState<'default' | 'catppuccin'>('default');
+	const [searchOpen, setSearchOpen] = useState(false);
+	const [searchQuery, setSearchQuery] = useState("");
+	const [searchResultIndex, setSearchResultIndex] = useState(0);
+	const searchRef = useRef<HTMLInputElement | null>(null);
 
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
-	// Monitor screen size for mobile switching
+	// Reset search result index when query changes
+	useEffect(() => {
+		setSearchResultIndex(0);
+	}, [searchQuery]);
+
+	// Scroll to selected search result
+	useEffect(() => {
+		if (searchOpen && searchResultIndex > 0) {
+			setTimeout(() => {
+				const selectedElement = document.querySelector(`[data-search-index="${searchResultIndex}"]`);
+				if (selectedElement) {
+					selectedElement.scrollIntoView({ block: 'nearest' });
+				}
+			}, 100);
+		}
+	}, [searchOpen, searchResultIndex]);
 	useEffect(() => {
 		const handleResize = () => setIsMobile(window.innerWidth < 768);
 		handleResize();
@@ -459,6 +506,15 @@ export default function App() {
 				return;
 			}
 
+			// If search is open, handle Escape to close
+			if (searchOpen) {
+				if (e.key === 'Escape') {
+					e.preventDefault();
+					setSearchOpen(false);
+				}
+				return;
+			}
+
 			// When Visual Mode is active, CodeMirror handles all vim keys internally.
 			// We only intercept global navigation keys (2, 3) here.
 			if (visualMode && focusedPanel === 'reader') {
@@ -486,6 +542,30 @@ export default function App() {
 			if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
 				e.preventDefault();
 				setSidebarOpen(p => !p);
+				return;
+			}
+
+			// ── Ctrl+K: open email search ──
+			if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+				e.preventDefault();
+				setSearchOpen(true);
+				setSearchResultIndex(0);
+				return;
+			}
+
+			// ── Ctrl+P: move to previous search result ──
+			if ((e.ctrlKey || e.metaKey) && e.key === 'p' && searchOpen) {
+				e.preventDefault();
+				const searchResults = searchEmails(emails, searchQuery);
+				setSearchResultIndex(prev => (prev > 0 ? prev - 1 : searchResults.length - 1));
+				return;
+			}
+
+			// ── Ctrl+N: move to next search result ──
+			if ((e.ctrlKey || e.metaKey) && e.key === 'n' && searchOpen) {
+				e.preventDefault();
+				const searchResults = searchEmails(emails, searchQuery);
+				setSearchResultIndex(prev => (prev < searchResults.length - 1 ? prev + 1 : 0));
 				return;
 			}
 
@@ -554,7 +634,7 @@ export default function App() {
 
 		window.addEventListener('keydown', handleKeyDown);
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [focusedPanel, visualMode, emails, selectedIdx, plainText, paletteOpen]);
+	}, [focusedPanel, visualMode, emails, selectedIdx, plainText, paletteOpen, searchOpen, searchQuery, searchResultIndex]);
 
 	// ── Resizers ──
 	const startDragging1 = (e: React.MouseEvent) => {
@@ -619,7 +699,7 @@ export default function App() {
 								{ label: "Unread", icon: "M12 19l9 2-9-18-9 18 9-2zm0 0v-8", active: false },
 								{ label: "Important", icon: "M12 9v2m0 4h.01M12 3l9.66 5.33v5.34L12 21l-9.66-5.33V8.33L12 3z", active: false },
 							].map((item) => (
-								<button key={item.label} className={`w-full px-4 py-3 text-left transition flex items-center ${sidebarOpen ? "justify-start" : "justify-center"} ${item.active ? "bg-zinc-900 ring-1 ring-inset ring-zinc-600" : "bg-black hover:bg-zinc-950/60"}`}>
+								<button key={item.label} className={`w-full px-4 py-3 text-left transition flex items-center ${sidebarOpen ? "justify-start" : "justify-center"} ${item.active ? "bg-zinc-900 ring-1 ring-inset ring-zinc-600" : "bg-black hover:bg-zinc-800/60"}`}>
 									<div className={`flex items-center ${sidebarOpen ? "gap-2.5" : "gap-0 flex-col"}`}>
 										<svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path d={item.icon} /></svg>
 										<span className={`${sidebarOpen ? "truncate text-xs" : "text-[8px] mt-0.5 text-zinc-500 truncate max-w-full"} ${item.active ? "font-medium text-white" : "text-zinc-300"}`}>{item.label}</span>
@@ -974,6 +1054,109 @@ export default function App() {
 								? 'Catppuccin Mocha theme active — warm latte-inspired dark tones with pastel accents.'
 								: 'Dark terminal theme with blue accent — the default Harbor look.'}
 						</p>
+					</div>
+				</div>
+			)}
+
+			{/* ── Email Search Popup ── */}
+			{searchOpen && (
+				<div
+					className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+					onClick={() => setSearchOpen(false)}
+				>
+					{/* Backdrop */}
+					<div className="absolute inset-0 bg-black/60" />
+					{/* Search Popup */}
+					<div
+						className="relative w-full max-w-2xl rounded-lg border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/60 overflow-hidden"
+						onClick={e => e.stopPropagation()}
+					>
+						<div className="flex items-center border-b border-zinc-800 px-4">
+							<svg className="h-4 w-4 shrink-0 text-zinc-500" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+								<path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+							</svg>
+							<input
+								ref={searchRef}
+								type="text"
+								value={searchQuery}
+								onChange={e => setSearchQuery(e.target.value)}
+								onKeyDown={e => {
+									const searchResults = searchEmails(emails, searchQuery);
+									switch (e.key) {
+										case 'Escape':
+											e.preventDefault();
+											setSearchOpen(false);
+											break;
+										case 'ArrowDown':
+											e.preventDefault();
+											setSearchResultIndex(prev => (prev < searchResults.length - 1 ? prev + 1 : 0));
+											break;
+										case 'ArrowUp':
+											e.preventDefault();
+											setSearchResultIndex(prev => (prev > 0 ? prev - 1 : searchResults.length - 1));
+											break;
+										case 'Enter':
+											e.preventDefault();
+											if (searchResults[searchResultIndex]) {
+												const idx = emails.indexOf(searchResults[searchResultIndex]);
+												if (idx !== -1) {
+													setSelectedIdx(idx);
+													setFocusedPanel('reader');
+													setSearchOpen(false);
+												}
+											}
+											break;
+									}
+								}}
+								placeholder="Search emails by subject, sender, or content..."
+								className="w-full bg-transparent px-3 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none"
+								autoFocus
+							/>
+						</div>
+						<div className="max-h-96 overflow-y-auto py-2">
+							{searchEmails(emails, searchQuery).length === 0 ? (
+								searchQuery ? (
+									<div className="px-4 py-8 text-center text-xs text-zinc-600 font-mono">
+										No emails found matching "{searchQuery}"
+									</div>
+								) : (
+									<div className="px-4 py-8 text-center text-xs text-zinc-600 font-mono">
+										Type to search emails...
+									</div>
+								)
+							) : (
+								searchEmails(emails, searchQuery).map((email, i) => {
+									const unread = isUnread(email.subject);
+									const active = selectedIdx === emails.indexOf(email);
+									const isSelected = i === searchResultIndex;
+									return (
+										<button
+											data-search-index={i}
+											key={email.id || i}
+											className={`w-full px-4 py-2.5 text-left text-xs transition flex items-center gap-3 ${isSelected ? "bg-zinc-800 text-white" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"}`}
+											onClick={() => {
+												const idx = emails.indexOf(email);
+												if (idx !== -1) {
+													setSelectedIdx(idx);
+													setFocusedPanel('reader');
+													setSearchOpen(false);
+												}
+											}}
+										>
+											<div className="flex-1 min-w-0">
+												<div className="flex items-center gap-2">
+													<span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded text-[8px] font-bold ${unread ? "bg-white text-black" : "bg-zinc-800 text-zinc-400"}`}>{extractName(email.from_addr)[0]?.toUpperCase() || "?"}</span>
+													<span className={`truncate ${unread ? "font-bold text-white" : "text-zinc-300"}`}>{extractName(email.from_addr)}</span>
+													{unread && <span className="shrink-0 text-[8px] font-bold bg-white text-black px-1.5 py-0.5 rounded">UNREAD</span>}
+												</div>
+												<p className={`mt-1.5 truncate ${unread ? "font-medium" : ""}`}>{highlightText(email.subject, searchQuery)}</p>
+												{bodyPreview(email) && <p className="mt-1 truncate text-[10px] text-zinc-500">{bodyPreview(email, 100)}</p>}
+											</div>
+										</button>
+									);
+								})
+							)}
+						</div>
 					</div>
 				</div>
 			)}

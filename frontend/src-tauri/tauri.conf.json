@@ -1,37 +1,40 @@
 {
-    "$schema": "./gen/schemas/desktop-schema.json",
-    "productName": "Harbor",
-    "version": "0.1.0",
-    "identifier": "com.harbor.app",
-    "build": {
-        "devUrl": "http://localhost:5173",
-        "frontendDist": "../out",
-        "beforeDevCommand": "npm run dev",
-        "beforeBuildCommand": "npm run build"
-    },
-    "app": {
-        "windows": [
-            {
-                "label": "main",
-                "title": "Harbor",
-                "width": 900,
-                "height": 700,
-                "resizable": true,
-                "fullscreen": false
-            }
-        ],
-        "security": {
-            "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'",
-            "capabilities": ["default"]
-        }
-    },
-    "bundle": {
-        "active": true,
-        "targets": "all",
-        "icon": [
-            "icons/icon.icns",
-            "icons/icon.ico",
-            "icons/icon.png"
-        ]
+  "$schema": "./gen/schemas/desktop-schema.json",
+  "productName": "Harbor",
+  "version": "0.1.0",
+  "identifier": "com.harbor.app",
+
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../out",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Harbor",
+        "width": 900,
+        "height": 700,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:3002 https://localhost:3002;"
     }
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
+  }
 }
