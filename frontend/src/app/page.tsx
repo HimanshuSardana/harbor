@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { EditorView, keymap } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
+import { vim } from "@replit/codemirror-vim";
 
 const API_BASE = "http://localhost:3002";
 
@@ -112,22 +115,7 @@ function bodyPreview(html: string | undefined, maxLen = 80): string {
 	return text.slice(0, maxLen).replace(/\s+\S*$/, "") + "…";
 }
 
-// ─── Plain-text visual mode helpers ─────────────────────────────────────────
 
-/** Normalise a selection range so start ≤ end */
-function selRange(ar: number, ac: number, br: number, bc: number) {
-	if (ar < br || (ar === br && ac <= bc)) return { sr: ar, sc: ac, er: br, ec: bc };
-	return { sr: br, sc: bc, er: ar, ec: bc };
-}
-
-/** Extract selected text from lines given a normalised range */
-function extractSelection(lines: string[], sr: number, sc: number, er: number, ec: number): string {
-	if (sr === er) return lines[sr].slice(sc, ec);
-	let parts = [lines[sr].slice(sc)];
-	for (let r = sr + 1; r < er; r++) parts.push(lines[r]);
-	parts.push(lines[er].slice(0, ec));
-	return parts.join("\n");
-}
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -140,16 +128,11 @@ export default function App() {
 	const [refreshing, setRefreshing] = useState(false);
 	const [focusedPanel, setFocusedPanel] = useState<'list' | 'reader'>('list');
 	const [visualMode, setVisualMode] = useState(false);
-
-	// Plain-text visual mode state
 	const [plainText, setPlainText] = useState("");
-	const [cursorRow, setCursorRow] = useState(0);
-	const [cursorCol, setCursorCol] = useState(0);
-	const [anchorRow, setAnchorRow] = useState<number | null>(null);
-	const [anchorCol, setAnchorCol] = useState<number | null>(null);
 
 	const listRef = useRef<HTMLDivElement | null>(null);
-	const plainRef = useRef<HTMLDivElement | null>(null);
+	const cmContainerRef = useRef<HTMLDivElement | null>(null);
+	const cmViewRef = useRef<EditorView | null>(null);
 
 	// Resizing States
 	const [col1Width, setCol1Width] = useState(240);
@@ -218,26 +201,137 @@ export default function App() {
 		}
 	}, [selectedIdx]);
 
-	// Auto-scroll plain text cursor into view
+	// ── CodeMirror vim editor lifecycle ──
 	useEffect(() => {
-		if (visualMode && plainRef.current) {
-			const el = plainRef.current.querySelector(`[data-cursor]`) as HTMLElement | null;
-			el?.scrollIntoView({ block: 'nearest' });
+		// Destroy existing editor if any
+		if (cmViewRef.current) {
+			cmViewRef.current.destroy();
+			cmViewRef.current = null;
 		}
-	}, [cursorRow, cursorCol, visualMode]);
 
-	// ── Keybindings ──
+		if (!visualMode || !plainText || !cmContainerRef.current) return;
+
+		const container = cmContainerRef.current;
+
+		// Dark theme matching our palette
+		const darkTheme = EditorView.theme({
+			"&": {
+				backgroundColor: "#000",
+				color: "#e4e4e7",
+				height: "100%",
+				fontSize: "13px",
+				fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", monospace',
+			},
+			"&.cm-focused": { outline: "none" },
+			".cm-cursor, .cm-dropCursor": { borderLeftColor: "#3b82f6" },
+			".cm-selectionBackground, ::selection": { backgroundColor: "#3b82f680" },
+			".cm-activeLine": { backgroundColor: "transparent" },
+			".cm-gutters": {
+				backgroundColor: "#000",
+				color: "#52525b",
+				border: "none",
+				borderRight: "1px solid #27272a",
+			},
+			".cm-lineNumbers .cm-activeLineGutter": {
+				backgroundColor: "#18181b",
+				color: "#a1a1aa",
+			},
+			".cm-content": {
+				caretColor: "#3b82f6",
+				padding: "16px 8px",
+			},
+			".cm-line": {
+				padding: "0 4px",
+				lineHeight: "1.7",
+			},
+			".cm-panels": { backgroundColor: "#09090b", color: "#a1a1aa", border: "1px solid #27272a" },
+			".cm-panels-top": { borderBottom: "1px solid #27272a" },
+			".cm-panels-bottom": { borderTop: "1px solid #27272a" },
+			".cm-search": { backgroundColor: "#09090b", padding: "8px" },
+			".cm-button": {
+				backgroundColor: "#18181b",
+				color: "#e4e4e7",
+				border: "1px solid #27272a",
+				borderRadius: "4px",
+				padding: "2px 8px",
+			},
+			".cm-textfield": {
+				backgroundColor: "#09090b",
+				color: "#e4e4e7",
+				border: "1px solid #27272a",
+				borderRadius: "4px",
+				padding: "2px 4px",
+			},
+			".cm-fat-cursor-mark": {
+				backgroundColor: "#3b82f680",
+			},
+		}, { dark: true });
+
+		const state = EditorState.create({
+			doc: plainText,
+			extensions: [
+				darkTheme,
+				EditorView.lineWrapping,
+				vim(),
+				keymap.of([
+					{
+						// Escape in vim NORMAL mode → exit visual mode entirely
+						// vim() handles Escape first (visual→normal transition).
+						// Only when already in normal mode does this run.
+						key: "Escape",
+						run: () => {
+							setVisualMode(false);
+							setPlainText("");
+							return true;
+						},
+					},
+				]),
+			],
+		});
+
+		const view = new EditorView({ state, parent: container });
+		cmViewRef.current = view;
+		view.focus();
+
+		return () => {
+			view.destroy();
+			cmViewRef.current = null;
+		};
+	}, [visualMode, plainText]);
+
+	// ── Keybindings (only for non-CodeMirror interactions) ──
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			const tag = (e.target as HTMLElement).tagName;
 			if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
+			// When Visual Mode is active, CodeMirror handles all vim keys internally.
+			// We only intercept global navigation keys (2, 3) here.
+			if (visualMode && focusedPanel === 'reader') {
+				switch (e.key) {
+					case '2':
+						e.preventDefault();
+						setVisualMode(false);
+						setPlainText("");
+						setFocusedPanel('list');
+						if (emails.length > 0 && selectedIdx === null) setSelectedIdx(0);
+						break;
+					case '3':
+						if (selectedIdx !== null && emails[selectedIdx]) {
+							e.preventDefault();
+							setVisualMode(false);
+							setPlainText("");
+							setFocusedPanel('reader');
+						}
+						break;
+				}
+				return;
+			}
+
 			switch (e.key) {
-				// ── Focus ──
 				case '2':
 					e.preventDefault();
 					setFocusedPanel('list');
-					setVisualMode(false);
 					if (emails.length > 0 && selectedIdx === null) setSelectedIdx(0);
 					break;
 
@@ -245,19 +339,13 @@ export default function App() {
 					if (selectedIdx !== null && emails[selectedIdx]) {
 						e.preventDefault();
 						setFocusedPanel('reader');
-						setVisualMode(false);
 					}
 					break;
 
-				// ── List navigation ──
 				case 'j':
 					if (focusedPanel === 'list' && emails.length > 0) {
 						e.preventDefault();
 						setSelectedIdx(p => p === null ? 0 : Math.min(p + 1, emails.length - 1));
-					} else if (focusedPanel === 'reader' && visualMode) {
-						e.preventDefault();
-						const lines = plainText.split("\n");
-						setCursorRow(r => Math.min(r + 1, lines.length - 1));
 					} else if (focusedPanel === 'reader' && iframeRef.current?.contentWindow) {
 						e.preventDefault();
 						iframeRef.current.contentWindow.scrollBy(0, 60);
@@ -268,44 +356,9 @@ export default function App() {
 					if (focusedPanel === 'list' && emails.length > 0) {
 						e.preventDefault();
 						setSelectedIdx(p => p === null ? 0 : Math.max(p - 1, 0));
-					} else if (focusedPanel === 'reader' && visualMode) {
-						e.preventDefault();
-						setCursorRow(r => Math.max(r - 1, 0));
 					} else if (focusedPanel === 'reader' && iframeRef.current?.contentWindow) {
 						e.preventDefault();
 						iframeRef.current.contentWindow.scrollBy(0, -60);
-					}
-					break;
-
-				case 'h':
-					if (focusedPanel === 'reader' && visualMode) {
-						e.preventDefault();
-						setCursorCol(c => Math.max(c - 1, 0));
-					}
-					break;
-
-				case 'l':
-					if (focusedPanel === 'reader' && visualMode) {
-						e.preventDefault();
-						setCursorCol(c => {
-							const lineLen = plainText.split("\n")[cursorRow]?.length ?? 0;
-							return Math.min(c + 1, lineLen);
-						});
-					}
-					break;
-
-				case '0':
-					if (focusedPanel === 'reader' && visualMode) {
-						e.preventDefault();
-						setCursorCol(0);
-					}
-					break;
-
-				case '$':
-					if (focusedPanel === 'reader' && visualMode) {
-						e.preventDefault();
-						const lineLen = plainText.split("\n")[cursorRow]?.length ?? 0;
-						setCursorCol(lineLen);
 					}
 					break;
 
@@ -317,53 +370,19 @@ export default function App() {
 					}
 					break;
 
-				// ── Visual mode toggle ──
 				case 'v':
 					if (focusedPanel === 'reader' && selectedIdx !== null && emails[selectedIdx]?.body) {
 						e.preventDefault();
-						if (!visualMode) {
-							// Enter visual mode: extract plain text
-							const text = stripHtml(emails[selectedIdx].body || "");
+						const text = stripHtml(emails[selectedIdx].body || "");
+						if (text.trim()) {
 							setPlainText(text);
-							setCursorRow(0);
-							setCursorCol(0);
-							setAnchorRow(0);
-							setAnchorCol(0);
 							setVisualMode(true);
-						} else {
-							// Exit visual mode
-							setVisualMode(false);
-							setPlainText("");
 						}
 					}
 					break;
 
-				// ── Yank (copy) ──
-				case 'y':
-					if (focusedPanel === 'reader' && visualMode && anchorRow !== null && anchorCol !== null) {
-						e.preventDefault();
-						const lines = plainText.split("\n");
-						const { sr, sc, er, ec } = selRange(anchorRow, anchorCol, cursorRow, cursorCol);
-						const text = extractSelection(lines, sr, sc, er, ec);
-						if (text) {
-							navigator.clipboard.writeText(text).then(() => {
-								const el = plainRef.current;
-								if (el) {
-									el.classList.add('yanked');
-									setTimeout(() => el.classList.remove('yanked'), 400);
-								}
-							});
-						}
-					}
-					break;
-
-				// ── Escape ──
 				case 'Escape':
-					if (visualMode) {
-						e.preventDefault();
-						setVisualMode(false);
-						setPlainText("");
-					} else if (focusedPanel === 'reader') {
+					if (focusedPanel === 'reader') {
 						e.preventDefault();
 						setFocusedPanel('list');
 					}
@@ -373,7 +392,7 @@ export default function App() {
 
 		window.addEventListener('keydown', handleKeyDown);
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [focusedPanel, visualMode, emails, selectedIdx, plainText, cursorRow, cursorCol, anchorRow, anchorCol]);
+	}, [focusedPanel, visualMode, emails, selectedIdx, plainText]);
 
 	// ── Resizers ──
 	const startDragging1 = (e: React.MouseEvent) => {
@@ -403,80 +422,14 @@ export default function App() {
 		setSelectedIdx(null);
 		setVisualMode(false);
 		setPlainText("");
+		if (cmViewRef.current) { cmViewRef.current.destroy(); cmViewRef.current = null; }
 		fetchData(true);
 	};
 
 	const selectedEmail = selectedIdx !== null ? emails[selectedIdx] : null;
 	const isDraggingAny = isDragging1 || isDragging2;
 
-	// ── Render plain-text visual mode ──
-	function renderPlainTextView() {
-		const lines = plainText.split("\n");
-		const { sr, sc, er, ec } = anchorRow !== null && anchorCol !== null
-			? selRange(anchorRow, anchorCol, cursorRow, cursorCol)
-			: { sr: cursorRow, sc: cursorCol, er: cursorRow, ec: cursorCol };
 
-		return (
-			<div ref={plainRef} className="h-full w-full overflow-auto p-6 font-mono text-sm leading-relaxed whitespace-pre-wrap select-text">
-				{lines.map((line, r) => {
-					// Determine if this row is selected
-					const rowSelected = r >= sr && r <= er;
-					let before = "", selected = "", after = "";
-					if (rowSelected && sr === er) {
-						// Single line selection
-						before = line.slice(0, sc);
-						selected = line.slice(sc, ec);
-						after = line.slice(ec);
-					} else if (rowSelected && r === sr) {
-						// First line of multi-line
-						before = line.slice(0, sc);
-						selected = line.slice(sc);
-						after = "";
-					} else if (rowSelected && r === er) {
-						// Last line of multi-line
-						before = "";
-						selected = line.slice(0, ec);
-						after = line.slice(ec);
-					} else if (rowSelected) {
-						// Fully selected middle line
-						before = "";
-						selected = line;
-						after = "";
-					} else {
-						before = line;
-					}
-
-					const hasCursor = r === cursorRow;
-
-					return (
-						<div key={r} className="relative flex">
-							{/* Line number gutter */}
-							<span className="mr-4 inline-block w-8 shrink-0 text-right text-zinc-600 select-none">
-								{r + 1}
-							</span>
-							{/* Line content */}
-							<span className="relative">
-								{before && <span className="text-zinc-300">{before}</span>}
-								{selected && <span className="bg-blue-600 text-white rounded-none">{selected}</span>}
-								{after && <span className="text-zinc-300">{after}</span>}
-								{/* Cursor block */}
-								{hasCursor && (
-									<span
-										data-cursor
-										className="absolute top-0 inline-block w-[0.6em] h-[1.2em] bg-zinc-100 animate-pulse"
-										style={{
-											left: `${cursorCol * 0.6}em`,
-											pointerEvents: "none",
-										}}
-									/>
-								)}
-							</span>
-						</div>
-					);
-				})}
-			</div>
-		);
-	}
 
 	return (
 		<main
@@ -638,10 +591,10 @@ export default function App() {
 								</div>
 							</div>
 
-							{/* Body: either plain-text visual mode or iframe normal view */}
+							{/* Body: either CodeMirror vim visual mode or iframe normal view */}
 							<div className="flex-1 bg-black">
 								{visualMode && focusedPanel === 'reader' && plainText ? (
-									renderPlainTextView()
+									<div ref={cmContainerRef} className="h-full w-full overflow-hidden" />
 								) : selectedEmail.body ? (
 									<iframe
 										ref={iframeRef}
@@ -674,7 +627,7 @@ export default function App() {
 					{error ? "⚠ disconnected" : emails.length > 0 ? `${emails.length} messages` : loading ? "connecting…" : "ready"}
 					{visualMode && focusedPanel === 'reader' && plainText && (
 						<span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-green-800/50 text-green-300">
-							-- VISUAL -- ({cursorRow + 1},{cursorCol + 1})
+							-- VIM --
 						</span>
 					)}
 					{!visualMode && selectedEmail && !error && (
