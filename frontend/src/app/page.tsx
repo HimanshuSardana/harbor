@@ -117,7 +117,27 @@ export default function App() {
 	const [error, setError] = useState<string | null>(null);
 	const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 	const [refreshing, setRefreshing] = useState(false);
+	const [focusedPanel, setFocusedPanel] = useState<'list' | 'reader'>('list');
+	const listRef = useRef<HTMLDivElement | null>(null);
+
+	// Resizing States
+	const [col1Width, setCol1Width] = useState(240);
+	const [col2Width, setCol2Width] = useState(360);
+	const [isDragging1, setIsDragging1] = useState(false);
+	const [isDragging2, setIsDragging2] = useState(false);
+	const [isMobile, setIsMobile] = useState(false);
+
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+	// Monitor screen size for mobile switching
+	useEffect(() => {
+		const handleResize = () => {
+			setIsMobile(window.innerWidth < 768);
+		};
+		handleResize();
+		window.addEventListener("resize", handleResize);
+		return () => window.removeEventListener("resize", handleResize);
+	}, []);
 
 	const fetchData = useCallback(async (silent = false) => {
 		if (!silent) setLoading(true);
@@ -163,6 +183,109 @@ export default function App() {
 		}
 	}, [selectedIdx, emails]);
 
+	// Resizer Drag Handlers
+	const startDragging1 = (e: React.MouseEvent) => {
+		e.preventDefault();
+		setIsDragging1(true);
+		const startX = e.clientX;
+		const startWidth = col1Width;
+
+		const onMouseMove = (moveEvent: MouseEvent) => {
+			const deltaX = moveEvent.clientX - startX;
+			setCol1Width(Math.max(160, Math.min(startWidth + deltaX, 400)));
+		};
+
+		const onMouseUp = () => {
+			setIsDragging1(false);
+			document.removeEventListener("mousemove", onMouseMove);
+			document.removeEventListener("mouseup", onMouseUp);
+		};
+
+		document.addEventListener("mousemove", onMouseMove);
+		document.addEventListener("mouseup", onMouseUp);
+	};
+
+	const startDragging2 = (e: React.MouseEvent) => {
+		e.preventDefault();
+		setIsDragging2(true);
+		const startX = e.clientX;
+		const startWidth = col2Width;
+
+		const onMouseMove = (moveEvent: MouseEvent) => {
+			const deltaX = moveEvent.clientX - startX;
+			setCol2Width(Math.max(260, Math.min(startWidth + deltaX, 600)));
+		};
+
+		const onMouseUp = () => {
+			setIsDragging2(false);
+			document.removeEventListener("mousemove", onMouseMove);
+			document.removeEventListener("mouseup", onMouseUp);
+		};
+
+		document.addEventListener("mousemove", onMouseMove);
+		document.addEventListener("mouseup", onMouseUp);
+	};
+
+	// ── Vim keybindings ──
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			// Don't hijack typing in input/textarea elements
+			const tag = (e.target as HTMLElement).tagName;
+			if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+			switch (e.key) {
+				case '2':
+					e.preventDefault();
+					setFocusedPanel('list');
+					// If nothing selected, select the first item
+					if (emails.length > 0 && selectedIdx === null) {
+						setSelectedIdx(0);
+					}
+					break;
+
+				case 'j':
+					if (focusedPanel === 'list' && emails.length > 0) {
+						e.preventDefault();
+						setSelectedIdx((prev) => {
+							const next = prev === null ? 0 : Math.min(prev + 1, emails.length - 1);
+							return next;
+						});
+					}
+					break;
+
+				case 'k':
+					if (focusedPanel === 'list' && emails.length > 0) {
+						e.preventDefault();
+						setSelectedIdx((prev) => {
+							const next = prev === null ? 0 : Math.max(prev - 1, 0);
+							return next;
+						});
+					}
+					break;
+
+				case 'Enter':
+					if (focusedPanel === 'list' && selectedIdx !== null) {
+						e.preventDefault();
+						// Scroll selected item into view in case it's off-screen
+						const btn = listRef.current?.querySelector(`[data-idx="${selectedIdx}"]`) as HTMLElement | null;
+						btn?.scrollIntoView({ block: 'nearest' });
+					}
+					break;
+			}
+		};
+
+		window.addEventListener('keydown', handleKeyDown);
+		return () => window.removeEventListener('keydown', handleKeyDown);
+	}, [focusedPanel, emails.length, selectedIdx]);
+
+	// Auto-scroll the selected item into view when idx changes
+	useEffect(() => {
+		if (selectedIdx !== null && listRef.current) {
+			const btn = listRef.current.querySelector(`[data-idx="${selectedIdx}"]`) as HTMLElement | null;
+			btn?.scrollIntoView({ block: 'nearest' });
+		}
+	}, [selectedIdx]);
+
 	const handleRefresh = () => {
 		setRefreshing(true);
 		setSelectedIdx(null);
@@ -170,10 +293,11 @@ export default function App() {
 	};
 
 	const selectedEmail = selectedIdx !== null ? emails[selectedIdx] : null;
+	const isDraggingAny = isDragging1 || isDragging2;
 
 	return (
 		<main
-			className="grid h-screen w-screen overflow-hidden bg-black text-zinc-100"
+			className="grid h-screen w-screen overflow-hidden bg-black text-zinc-100 select-none"
 			style={{ gridTemplateRows: "48px 1fr 32px" }}
 		>
 			{/* ── Title bar ── */}
@@ -213,10 +337,13 @@ export default function App() {
 			</header>
 
 			{/* ── 3 Column Workplace ── */}
-			<div className="grid grid-cols-1 md:grid-cols-[240px_360px_1fr] overflow-hidden">
+			<div className="flex h-full w-full overflow-hidden">
 
 				{/* ── Column 1: Sidebar ── */}
-				<aside className="hidden md:block overflow-y-auto border-r border-zinc-900 bg-black p-3">
+				<aside
+					className="hidden md:block overflow-y-auto bg-black p-3 shrink-0"
+					style={isMobile ? {} : { width: `${col1Width}px` }}
+				>
 					<div className="mb-4 flex items-center justify-between rounded bg-zinc-950 px-3 py-2 border border-zinc-900">
 						<span className="text-xs font-semibold tracking-wide text-zinc-300">Inbox</span>
 						<span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-mono text-zinc-300">
@@ -268,8 +395,18 @@ export default function App() {
 					)}
 				</aside>
 
+				{/* ── Resizer 1 ── */}
+				<div
+					onMouseDown={startDragging1}
+					className={`hidden md:block w-1.5 cursor-col-resize shrink-0 transition-colors duration-150 z-30 ${isDragging1 ? "bg-zinc-400" : "bg-zinc-950 hover:bg-zinc-800 border-l border-r border-zinc-900"
+						}`}
+				/>
+
 				{/* ── Column 2: Email List ── */}
-				<section className="flex flex-col overflow-hidden border-r border-zinc-900 bg-black">
+				<section
+					className="flex flex-col overflow-hidden bg-black shrink-0 w-full md:w-auto"
+					style={isMobile ? {} : { width: `${col2Width}px` }}
+				>
 					{loading && !refreshing ? (
 						<div className="flex flex-1 items-center justify-center">
 							<div className="flex flex-col items-center gap-2">
@@ -319,16 +456,23 @@ export default function App() {
 							</div>
 
 							{/* Scrollable conversation items */}
-							<div className="flex-1 overflow-y-auto divide-y divide-zinc-900/60">
+							<div ref={listRef} className="flex-1 overflow-y-auto divide-y divide-zinc-900/60 select-none">
 								{emails.map((email, i) => {
 									const unread = isUnread(email.subject);
 									const active = selectedIdx === i;
+									const focus = focusedPanel === 'list';
 									return (
 										<button
 											key={i}
-											onClick={() => setSelectedIdx(active ? null : i)}
+											data-idx={i}
+											onClick={() => {
+												setFocusedPanel('list');
+												setSelectedIdx(active ? null : i);
+											}}
 											className={`w-full px-4 py-3 text-left transition ${active
-													? "bg-zinc-900"
+													? focus
+														? "bg-zinc-900 ring-1 ring-inset ring-zinc-600"
+														: "bg-zinc-900"
 													: "bg-black hover:bg-zinc-950/60"
 												}`}
 										>
@@ -381,8 +525,15 @@ export default function App() {
 					)}
 				</section>
 
+				{/* ── Resizer 2 ── */}
+				<div
+					onMouseDown={startDragging2}
+					className={`hidden md:block w-1.5 cursor-col-resize shrink-0 transition-colors duration-150 z-30 ${isDragging2 ? "bg-zinc-400" : "bg-zinc-950 hover:bg-zinc-800 border-l border-r border-zinc-900"
+						}`}
+				/>
+
 				{/* ── Column 3: Email Reader Pane ── */}
-				<section className="flex flex-col overflow-hidden bg-black">
+				<section className="flex-1 flex flex-col overflow-hidden bg-black">
 					{selectedEmail ? (
 						<div className="flex h-full flex-col overflow-hidden">
 
@@ -418,7 +569,7 @@ export default function App() {
 									<iframe
 										ref={iframeRef}
 										sandbox="allow-same-origin"
-										className="h-full w-full border-0"
+										className={`h-full w-full border-0 ${isDraggingAny ? "pointer-events-none" : ""}`}
 										title="Email reading pane"
 										srcDoc={buildIframeDoc(selectedEmail)}
 									/>
@@ -431,7 +582,10 @@ export default function App() {
 
 						</div>
 					) : (
-						<div className="flex h-full flex-col items-center justify-center text-center p-8">
+						<div
+							onClick={() => setFocusedPanel('reader')}
+							className="flex h-full flex-col items-center justify-center text-center p-8 cursor-default"
+						>
 							<div className="relative mb-3 flex h-10 w-10 items-center justify-center rounded border border-zinc-900 bg-zinc-950/20 text-zinc-600">
 								<svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
 									<path d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
@@ -439,8 +593,11 @@ export default function App() {
 							</div>
 							<h3 className="text-xs font-bold tracking-wide text-zinc-400 uppercase">No conversation selected</h3>
 							<p className="mt-1 max-w-[200px] text-[10px] text-zinc-600 leading-normal">
-								Select an email from the left pane to view its content here.
+								Select an email from the conversations list to view its content here.
 							</p>
+							<span className="mt-3 inline-block rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-[9px] text-zinc-600 font-mono">
+								2 &nbsp;focus list &middot; j/k &nbsp;navigate &middot; Enter open
+							</span>
 						</div>
 					)}
 				</section>
