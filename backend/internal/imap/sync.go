@@ -20,14 +20,133 @@ import (
 	"github.com/HimanshuSardana/harbor/backend/internal/store"
 )
 
-const syncBatchSize = 50
+const syncBatchSize   = 50    // max new emails per forward sync
+const backfillBatchSize = 50  // max old emails per backfill request
+
+// SyncOlder fetches up to count messages before the oldest synced UID.
+// This is a backfill — it reaches backwards into the mailbox history.
+// Pass count=0 to use the default batch size (50).
+func SyncOlder(account config.Account, st *store.Store, count int) error {
+	st.LockSync()
+	defer st.UnlockSync()
+
+	mailbox := account.Email
+	_, uidFirst, _ := st.GetSyncState(mailbox)
+
+	if count <= 0 {
+		count = backfillBatchSize
+	}
+
+	log.Printf("[backfill] %s: start (uid_first=%d, count=%d)", mailbox, uidFirst, count)
+
+	c, err := client.DialTLS(account.ImapHost+":993", nil)
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", account.ImapHost, err)
+	}
+	defer c.Logout()
+
+	if err := c.Login(account.Email, account.Password); err != nil {
+		return fmt.Errorf("login: %w", err)
+	}
+
+	mbox, err := c.Select("INBOX", true)
+	if err != nil {
+		return fmt.Errorf("select: %w", err)
+	}
+
+	// If we've never synced uid_first defaults to 0 meaning "not set."
+	// In that case uid_first = uid_next - 1 or just mbox.UidNext - 1.
+	if uidFirst == 0 {
+		uidFirst = mbox.UidNext - 1
+	}
+
+	// Everything is already synced.
+	if uidFirst <= 1 {
+		log.Printf("[backfill] %s: no older messages (uid_first=%d)", mailbox, uidFirst)
+		return nil
+	}
+
+	// Build a range for older messages.
+	end := uidFirst - 1
+	start := uint32(1)
+	if end > uint32(count) {
+		start = end - uint32(count) + 1
+	}
+
+	log.Printf("[backfill] %s: fetching UIDs %d–%d (%d msgs)", mailbox, start, end, end-start+1)
+
+	seqset := new(imap.SeqSet)
+	seqset.AddRange(start, end)
+
+	bodySection := &imap.BodySectionName{
+		BodyPartName: imap.BodyPartName{Specifier: imap.EntireSpecifier},
+		Peek:         true,
+	}
+
+	items := []imap.FetchItem{
+		imap.FetchEnvelope,
+		imap.FetchBodyStructure,
+		imap.FetchFlags,
+		imap.FetchUid,
+		bodySection.FetchItem(),
+	}
+
+	messages := make(chan *imap.Message, count)
+	var fetchErr error
+	go func() { fetchErr = c.UidFetch(seqset, items, messages) }()
+
+	var oldestUID uint32
+	synced := 0
+	for msg := range messages {
+		raw := extractRawFromBody(msg)
+		if raw == nil {
+			continue
+		}
+		row := emailRowFromMessage(msg, mailbox)
+		row.BodyText, row.BodyHTML = extractTextBodies(raw)
+
+		seen := hasFlag(msg.Flags, "\\Seen")
+		filename, err := st.SaveRaw(mailbox, msg.Uid, raw, seen)
+		if err != nil {
+			log.Printf("[backfill] %s: save .eml UID=%d: %v", mailbox, msg.Uid, err)
+			continue
+		}
+		row.Filename = filename
+
+		if err := st.InsertEmail(row); err != nil {
+			log.Printf("[backfill] %s: insert UID=%d: %v", mailbox, msg.Uid, err)
+			continue
+		}
+		if oldestUID == 0 || msg.Uid < oldestUID {
+			oldestUID = msg.Uid
+		}
+		synced++
+	}
+
+	if fetchErr != nil {
+		return fmt.Errorf("fetch: %w", fetchErr)
+	}
+
+	// Update the uid_first boundary so subsequent backfills go further back.
+	if synced > 0 {
+		if err := st.SetSyncStateBackfill(mailbox, oldestUID); err != nil {
+			return fmt.Errorf("save backfill state: %w", err)
+		}
+	}
+
+	log.Printf("[backfill] %s: done — %d synced, uid_first now %d", mailbox, synced, oldestUID)
+	return nil
+}
 
 // Sync pulls new messages from the IMAP server since the last sync, writes
 // each as an .eml file into the maildir, and indexes the metadata + body text
 // in the SQLite store.
 func Sync(account config.Account, st *store.Store) error {
+	st.LockSync()
+	defer st.UnlockSync()
+
 	mailbox := account.Email
-	uidNext, uidValidity := st.GetSyncState(mailbox)
+	uidNext, _, uidValidity := st.GetSyncState(mailbox)
 
 	log.Printf("[sync] %s: start (uid_next=%d, uid_validity=%d)", mailbox, uidNext, uidValidity)
 
@@ -93,6 +212,7 @@ func Sync(account config.Account, st *store.Store) error {
 	var fetchErr error
 	go func() { fetchErr = c.UidFetch(seqset, items, messages) }()
 
+	var oldestUID uint32
 	synced := 0
 	for msg := range messages {
 		// Extract the raw message bytes from the BODY[] response.
@@ -120,6 +240,9 @@ func Sync(account config.Account, st *store.Store) error {
 			log.Printf("[sync] %s: insert UID=%d: %v", mailbox, msg.Uid, err)
 			continue
 		}
+		if oldestUID == 0 || msg.Uid < oldestUID {
+			oldestUID = msg.Uid
+		}
 		synced++
 	}
 
@@ -129,6 +252,12 @@ func Sync(account config.Account, st *store.Store) error {
 
 	if err := st.SetSyncState(mailbox, mbox.UidNext, mbox.UidValidity); err != nil {
 		return fmt.Errorf("save sync state: %w", err)
+	}
+
+	// Record uid_first on the very first forward sync so backfill knows
+	// where the oldest synced message lives.
+	if uidNext == 0 && synced > 0 {
+		_ = st.SetSyncStateBackfill(mailbox, oldestUID)
 	}
 
 	log.Printf("[sync] %s: done — %d new, uid_next now %d", mailbox, synced, mbox.UidNext)

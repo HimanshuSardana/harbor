@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
@@ -17,6 +18,18 @@ type Store struct {
 	DB      *sql.DB
 	Maildir string // absolute path to the cur/ directory
 	rootDir string // absolute path to the $HOME/.harbor directory
+
+	syncMu sync.Mutex // serialises concurrent sync/backfill operations
+}
+
+// LockSync acquires the sync lock. Use before Sync / SyncOlder.
+func (s *Store) LockSync() {
+	s.syncMu.Lock()
+}
+
+// UnlockSync releases the sync lock.
+func (s *Store) UnlockSync() {
+	s.syncMu.Unlock()
 }
 
 // Open opens (or creates) the local email cache.
@@ -119,10 +132,17 @@ func (s *Store) migrate() error {
 	CREATE TABLE IF NOT EXISTS sync_state (
 		mailbox      TEXT PRIMARY KEY,
 		uid_next     INTEGER NOT NULL DEFAULT 1,
+		uid_first    INTEGER NOT NULL DEFAULT 0,
 		uid_validity INTEGER NOT NULL DEFAULT 0,
 		updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	`
-	_, err := s.DB.Exec(schema)
-	return err
+	if _, err := s.DB.Exec(schema); err != nil {
+		return err
+	}
+
+	// Migration: add uid_first column if upgrading from an older schema.
+	_, _ = s.DB.Exec("ALTER TABLE sync_state ADD COLUMN uid_first INTEGER NOT NULL DEFAULT 0")
+
+	return nil
 }

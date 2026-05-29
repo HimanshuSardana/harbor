@@ -108,14 +108,14 @@ func (s *Store) CountEmails(mailbox string) (int, error) {
 // Sync-state helpers
 // ---------------------------------------------------------------------------
 
-// GetSyncState returns the last known UIDNEXT and UIDVALIDITY for a mailbox.
-func (s *Store) GetSyncState(mailbox string) (uidNext, uidValidity uint32) {
-	row := s.DB.QueryRow(`SELECT uid_next, uid_validity FROM sync_state WHERE mailbox = ?`, mailbox)
-	row.Scan(&uidNext, &uidValidity)
-	return uidNext, uidValidity
+// GetSyncState returns the stored UIDNEXT, UIDVALIDITY and UID_FIRST for a mailbox.
+func (s *Store) GetSyncState(mailbox string) (uidNext, uidFirst, uidValidity uint32) {
+	row := s.DB.QueryRow(`SELECT COALESCE(uid_next,0), COALESCE(uid_first,0), COALESCE(uid_validity,0) FROM sync_state WHERE mailbox = ?`, mailbox)
+	row.Scan(&uidNext, &uidFirst, &uidValidity)
+	return uidNext, uidFirst, uidValidity
 }
 
-// SetSyncState stores the last known UIDNEXT and UIDVALIDITY.
+// SetSyncState stores the forward sync boundary (uid_next = next new UID to fetch).
 func (s *Store) SetSyncState(mailbox string, uidNext, uidValidity uint32) error {
 	_, err := s.DB.Exec(`
 		INSERT INTO sync_state (mailbox, uid_next, uid_validity, updated_at)
@@ -125,6 +125,23 @@ func (s *Store) SetSyncState(mailbox string, uidNext, uidValidity uint32) error 
 			uid_validity = excluded.uid_validity,
 			updated_at   = datetime('now')`,
 		mailbox, uidNext, uidValidity)
+	return err
+}
+
+// SetSyncStateBackfill records a backfill — reduces uid_first so subsequent
+// backfill calls know how far back we've gone.
+func (s *Store) SetSyncStateBackfill(mailbox string, uidFirst uint32) error {
+	_, err := s.DB.Exec(`
+		INSERT INTO sync_state (mailbox, uid_first, updated_at)
+		VALUES (?, ?, datetime('now'))
+		ON CONFLICT(mailbox) DO UPDATE SET
+			uid_first  = CASE
+				WHEN sync_state.uid_first = 0 THEN excluded.uid_first
+				WHEN excluded.uid_first = 0 THEN sync_state.uid_first
+				ELSE MIN(sync_state.uid_first, excluded.uid_first)
+			END,
+			updated_at = datetime('now')`,
+		mailbox, uidFirst)
 	return err
 }
 

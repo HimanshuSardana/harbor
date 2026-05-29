@@ -108,9 +108,21 @@ func BuildDocsSpec() map[string]interface{} {
 			"/api/sync": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Trigger IMAP sync",
-					"description": "Triggers an immediate background sync from the IMAP server. New emails are written to the local maildir and indexed.",
+					"description": "Triggers an immediate background sync. By default syncs new messages forward. Add ?backfill=N to fetch N older messages before the oldest cached one.",
 					"operationId": "syncNow",
 					"tags":        []string{"System"},
+					"parameters": []map[string]interface{}{
+						{
+							"name":        "backfill",
+							"in":          "query",
+							"description": "Number of older messages to fetch (backfill). Omit or set to 0 for forward sync only.",
+							"required":    false,
+							"schema": map[string]interface{}{
+								"type":    "integer",
+								"default": 0,
+							},
+						},
+					},
 					"responses": map[string]interface{}{
 						"202": map[string]interface{}{
 							"description": "Sync started.",

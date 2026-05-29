@@ -139,7 +139,8 @@ func (h *Handler) SearchEmails(w http.ResponseWriter, r *http.Request) {
 
 // SyncNow triggers an immediate IMAP sync in the background.
 //
-//	POST /api/sync
+//	POST /api/sync             — forward sync (new messages only)
+//	POST /api/sync?backfill=50 — backfill older messages
 func (h *Handler) SyncNow(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no store configured"})
@@ -150,15 +151,27 @@ func (h *Handler) SyncNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	backfill := parseIntParam(r, "backfill", 0)
+
 	go func() {
 		for _, acct := range h.cfg.Accounts {
-			if err := imap.Sync(acct, h.Store); err != nil {
-				log.Printf("[sync] %s: %v", acct.Email, err)
+			if backfill > 0 {
+				if err := imap.SyncOlder(acct, h.Store, backfill); err != nil {
+					log.Printf("[backfill] %s: %v", acct.Email, err)
+				}
+			} else {
+				if err := imap.Sync(acct, h.Store); err != nil {
+					log.Printf("[sync] %s: %v", acct.Email, err)
+				}
 			}
 		}
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "syncing"})
+	msg := "syncing"
+	if backfill > 0 {
+		msg = "backfilling"
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": msg})
 }
 
 // Health check endpoint.
