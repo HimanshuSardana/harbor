@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, drawSelection } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { vim } from "@replit/codemirror-vim";
 
@@ -224,7 +224,7 @@ export default function App() {
 			},
 			"&.cm-focused": { outline: "none" },
 			".cm-cursor, .cm-dropCursor": { borderLeftColor: "#3b82f6" },
-			".cm-selectionBackground, ::selection": { backgroundColor: "#3b82f680" },
+			".cm-selectionBackground": { backgroundColor: "#3b82f6" },
 			".cm-activeLine": { backgroundColor: "transparent" },
 			".cm-gutters": {
 				backgroundColor: "#000",
@@ -272,6 +272,30 @@ export default function App() {
 			extensions: [
 				darkTheme,
 				EditorView.lineWrapping,
+				drawSelection(),
+				// yank handler: copies to system clipboard BEFORE vim processes it.
+				// Returns false so vim also handles it (register mgmt, exit visual mode).
+				keymap.of([
+					{
+						key: "y",
+						run: (view) => {
+							const sel = view.state.selection.main;
+							if (sel.ranges.some(r => r.from < r.to)) {
+								const text = view.state.sliceDoc(sel.from, sel.to);
+								if (text) {
+									navigator.clipboard.writeText(text);
+									// flash feedback
+									const el = cmContainerRef.current;
+									if (el) {
+										el.classList.add('yanked');
+										setTimeout(() => el.classList.remove('yanked'), 400);
+									}
+								}
+							}
+							return false; // let vim handle it too (registers, exit visual mode)
+						},
+					},
+				]),
 				vim(),
 				keymap.of([
 					{
