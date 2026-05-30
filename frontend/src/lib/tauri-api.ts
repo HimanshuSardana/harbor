@@ -64,6 +64,8 @@ export async function fetchEmails(limit: number, offset: number, mailbox?: strin
 	const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
 	if (mailbox) params.set("mailbox", mailbox);
 	const res = await fetch(`${API_BASE}/api/emails?${params}`);
+	// 202 Accepted means the backend is syncing this account for the first time — no emails yet.
+	if (res.status === 202) return [];
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
 	const data = await res.json();
 	// API returns oldest-first within batch; reverse for newest-at-top.
@@ -78,6 +80,30 @@ export async function fetchEmails(limit: number, offset: number, mailbox?: strin
 		filename: e.filename,
 		flags: e.flags,
 	}));
+}
+
+/**
+ * Add a new IMAP account.
+ * Works in both Tauri and browser mode via HTTP API.
+ */
+export async function addAccount(account: {
+	name?: string;
+	email: string;
+	password: string;
+	imap_host: string;
+	imap_port?: number;
+	smtp_host?: string;
+	smtp_port?: number;
+}): Promise<void> {
+	const res = await fetch(`${API_BASE}/api/accounts`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(account),
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: "Unknown error" }));
+		throw new Error(err.error || `API error: ${res.status}`);
+	}
 }
 
 export async function fetchAccounts(): Promise<Account[]> {

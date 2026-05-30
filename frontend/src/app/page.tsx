@@ -1,6 +1,8 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import { useMailStore } from "@/hooks/use-mail-store";
+import { addAccount } from "@/lib/tauri-api";
 import { formatDate, extractName, isUnread, bodyPreview, buildIframeDoc, searchEmails, highlightSegments } from "@/lib/email-helpers";
 
 // ─── Main Component ─────────────────────────────────────────────────────────
@@ -256,6 +258,19 @@ export default function App() {
 			{/* ── Status bar ── */}
 			<footer className="flex items-center justify-between border-t border-zinc-900 bg-black px-4 text-[10px] font-mono text-zinc-500 pb-2 pt-2">
 				<span className="flex items-center gap-2">
+					{accounts.length > 0 && (
+						<button
+							onClick={() => accounts.length > 1 && setAccountPickerOpen(true)}
+							className={`flex items-center gap-1 transition ${accounts.length > 1 ? 'hover:text-zinc-300 cursor-pointer' : 'cursor-default'}`}
+						>
+							{currentAccount || accounts[0].email}
+							{accounts.length > 1 && (
+								<svg className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+									<path d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+								</svg>
+							)}
+						</button>
+					)}
 					{error ? "⚠ disconnected" : loading ? "connecting…" : backfilling ? `⟳ backfilling… (${emails.length})` : loadingMore ? `⟳ loading more… (${emails.length})` : emails.length > 0 ? `${emails.length} messages` : "ready"}
 					{visualMode && focusedPanel === 'reader' && plainText && (
 						<span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-green-800/50 text-green-300">
@@ -268,7 +283,7 @@ export default function App() {
 						</span>
 					)}
 				</span>
-				<span>{accounts.length > 0 ? (currentAccount || accounts[0].email) : "no account connected"} · port 3002</span>
+				<span>port 3002</span>
 			</footer>
 
 			{/* ── Command Palette Overlay ── */}
@@ -543,6 +558,11 @@ export default function App() {
 				</div>
 			)}
 
+			{/* ── Onboarding (no accounts configured) ── */}
+			{!loading && accounts.length === 0 && !error && (
+				<OnboardingForm onAccountAdded={() => fetchData(true)} />
+			)}
+
 			{/* ── Account Picker (search popup) ── */}
 			{accountPickerOpen && (
 				<div
@@ -694,6 +714,171 @@ export default function App() {
 					</div>
 				</div>
 			)}
+		</div>
+	);
+}
+
+// ─── Onboarding Form ────────────────────────────────────────────────────────
+
+function OnboardingForm({ onAccountAdded }: { onAccountAdded: () => void }) {
+	const [name, setName] = useState("");
+	const [email, setEmail] = useState("");
+	const [password, setPassword] = useState("");
+	const [imapHost, setImapHost] = useState("imap.gmail.com");
+	const [imapPort, setImapPort] = useState("993");
+	const [smtpHost, setSmtpHost] = useState("smtp.gmail.com");
+	const [smtpPort, setSmtpPort] = useState("587");
+	const [submitting, setSubmitting] = useState(false);
+	const [errMsg, setErrMsg] = useState("");
+
+	const handleSubmit = useCallback(async (e: React.FormEvent) => {
+		e.preventDefault();
+		if (!email.trim() || !password.trim() || !imapHost.trim()) return;
+		setSubmitting(true);
+		setErrMsg("");
+		try {
+			await addAccount({
+				name: name.trim() || undefined,
+				email: email.trim(),
+				password: password.trim(),
+				imap_host: imapHost.trim(),
+				imap_port: parseInt(imapPort, 10) || 993,
+				smtp_host: smtpHost.trim() || undefined,
+				smtp_port: parseInt(smtpPort, 10) || 587,
+			});
+			onAccountAdded();
+		} catch (err) {
+			setErrMsg(err instanceof Error ? err.message : "Failed to add account");
+		} finally {
+			setSubmitting(false);
+		}
+	}, [name, email, password, imapHost, imapPort, smtpHost, smtpPort, onAccountAdded]);
+
+	return (
+		<div className="fixed inset-0 z-50 flex items-center justify-center">
+			<div className="absolute inset-0 bg-black/80" />
+			<div className="relative w-full max-w-lg mx-4">
+				<div className="rounded-lg border border-zinc-800 bg-zinc-950 p-8 shadow-2xl shadow-black/60">
+					{/* Header */}
+					<div className="flex items-center gap-3 mb-6">
+						<div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 border border-blue-500/30">
+							<svg className="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+								<path d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+							</svg>
+						</div>
+						<div>
+							<h1 className="text-lg font-bold text-white tracking-tight">Welcome to Harbor</h1>
+							<p className="text-xs text-zinc-500 mt-0.5">Connect your first email account to get started</p>
+						</div>
+					</div>
+
+					<form onSubmit={handleSubmit} className="space-y-4">
+						{/* Name */}
+						<div>
+							<label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">Display Name <span className="text-zinc-700">(optional)</span></label>
+							<input
+								type="text"
+								value={name}
+								onChange={e => setName(e.target.value)}
+								placeholder="e.g. Work"
+								className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-zinc-600"
+							/>
+						</div>
+
+						{/* Email */}
+						<div>
+							<label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">Email Address</label>
+							<input
+								type="email"
+								value={email}
+								onChange={e => setEmail(e.target.value)}
+								placeholder="user@gmail.com"
+								required
+								className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-zinc-600"
+							/>
+						</div>
+
+						{/* Password */}
+						<div>
+							<label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">App Password</label>
+							<input
+								type="password"
+								value={password}
+								onChange={e => setPassword(e.target.value)}
+								placeholder="App-specific password"
+								required
+								className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-zinc-600"
+							/>
+							<p className="mt-1 text-[9px] text-zinc-600 leading-relaxed">
+								For Gmail, use an <a className="text-blue-400 underline underline-offset-2 decoration-blue-400/30" href="https://support.google.com/accounts/answer/185833" target="_blank" rel="noreferrer">app-specific password</a>. Others use your regular password.
+							</p>
+						</div>
+
+						{/* IMAP / SMTP */}
+						<div className="grid grid-cols-2 gap-3">
+							<div>
+								<label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">IMAP Host</label>
+								<input
+									type="text"
+									value={imapHost}
+									onChange={e => setImapHost(e.target.value)}
+									className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-zinc-600"
+								/>
+							</div>
+							<div>
+								<label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">IMAP Port</label>
+								<input
+									type="number"
+									value={imapPort}
+									onChange={e => setImapPort(e.target.value)}
+									className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-zinc-600"
+								/>
+							</div>
+							<div>
+								<label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">SMTP Host</label>
+								<input
+									type="text"
+									value={smtpHost}
+									onChange={e => setSmtpHost(e.target.value)}
+									className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-zinc-600"
+								/>
+							</div>
+							<div>
+								<label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-1.5">SMTP Port</label>
+								<input
+									type="number"
+									value={smtpPort}
+									onChange={e => setSmtpPort(e.target.value)}
+									className="w-full rounded border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 outline-none transition focus:border-zinc-600"
+								/>
+							</div>
+						</div>
+
+						{errMsg && (
+							<div className="rounded border border-red-900/40 bg-red-950/20 px-3 py-2">
+								<p className="text-[11px] text-red-400 font-mono">{errMsg}</p>
+							</div>
+						)}
+
+						<button
+							type="submit"
+							disabled={submitting}
+							className="w-full rounded border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-700 hover:border-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed"
+						>
+							{submitting ? (
+								<span className="flex items-center justify-center gap-2">
+									<svg className="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+										<path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+									</svg>
+									Connecting…
+								</span>
+							) : (
+								"Connect Account"
+							)}
+						</button>
+					</form>
+				</div>
+			</div>
 		</div>
 	);
 }

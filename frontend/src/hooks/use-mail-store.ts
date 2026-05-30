@@ -112,14 +112,23 @@ export function useMailStore() {
 		offsetRef.current = 0;
 		const mb = activeMailboxRef.current;
 		try {
-			const [emailsData, accountsData] = await Promise.all([
-				fetchEmails(PAGE_SIZE, 0, mb),
-				fetchAccounts(),
-			]);
-			// Discard stale responses from a previous account switch
+			// Fetch accounts first — if none exist, skip emails entirely.
+			const accountsData = await fetchAccounts();
+			if (version !== fetchVersionRef.current) return;
+			setAccounts(accountsData);
+
+			if (accountsData.length === 0) {
+				// No accounts configured — show onboarding, don't try to fetch emails.
+				setEmails([]);
+				setHasMore(false);
+				return;
+			}
+
+			// Accounts exist, now fetch emails.
+			const emailsData = await fetchEmails(PAGE_SIZE, 0, mb);
 			if (version !== fetchVersionRef.current) return;
 			setEmails(emailsData);
-			setAccounts(accountsData);
+
 			const total = typeof window !== "undefined" && "__TAURI__" in window
 				? await (await import("@/lib/tauri-api")).fetchTotalEmailCount(mb)
 				: 0;
@@ -132,7 +141,16 @@ export function useMailStore() {
 			}
 		} catch (e: unknown) {
 			if (version !== fetchVersionRef.current) return;
-			setError(e instanceof Error ? e.message : "Unknown error");
+			// If the error is about missing accounts, don't show generic error —
+			// the accounts array will be empty and onboarding will render.
+			const msg = e instanceof Error ? e.message : "Unknown error";
+			if (msg.toLowerCase().includes("no accounts")) {
+				setAccounts([]);
+				setEmails([]);
+				setHasMore(false);
+			} else {
+				setError(msg);
+			}
 		} finally {
 			if (version === fetchVersionRef.current) {
 				setLoading(false);
