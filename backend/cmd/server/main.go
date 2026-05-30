@@ -77,6 +77,8 @@ func main() {
 	mux.HandleFunc("GET /api/emails", h.GetEmails)
 	mux.HandleFunc("GET /api/search", h.SearchEmails)
 	mux.HandleFunc("POST /api/sync", h.SyncNow)
+	mux.HandleFunc("PATCH /api/emails/{id}/seen", h.MarkSeen)
+	mux.HandleFunc("PATCH /api/emails/{id}/unread", h.MarkUnread)
 
 	h.RegisterDocs(mux)
 

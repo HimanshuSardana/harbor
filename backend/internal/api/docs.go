@@ -140,6 +140,82 @@ func BuildDocsSpec() map[string]interface{} {
 					},
 				},
 			},
+			"/api/emails/{id}/seen": map[string]interface{}{
+				"patch": map[string]interface{}{
+					"summary":     "Mark email as seen",
+					"description": "Sets the Seen flag (S) on an email, marking it as read.",
+					"operationId": "markSeen",
+					"tags":        []string{"Emails"},
+					"parameters": []map[string]interface{}{
+						{
+							"name":        "id",
+							"in":          "path",
+							"description": "Email ID to mark as seen.",
+							"required":    true,
+							"schema": map[string]interface{}{"type": "integer"},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "Email marked as seen.",
+							"content": map[string]interface{}{
+								"application/json": map[string]interface{}{
+									"schema": map[string]interface{}{
+										"type": "object",
+										"properties": map[string]interface{}{
+											"status": map[string]interface{}{"type": "string"},
+										},
+									},
+								},
+							},
+						},
+						"400": map[string]interface{}{
+							"description": "Invalid email ID.",
+						},
+						"404": map[string]interface{}{
+							"description": "Email not found or no store configured.",
+						},
+					},
+				},
+			},
+			"/api/emails/{id}/unread": map[string]interface{}{
+				"patch": map[string]interface{}{
+					"summary":     "Mark email as unread",
+					"description": "Removes the Seen flag (S) from an email, marking it as unread.",
+					"operationId": "markUnread",
+					"tags":        []string{"Emails"},
+					"parameters": []map[string]interface{}{
+						{
+							"name":        "id",
+							"in":          "path",
+							"description": "Email ID to mark as unread.",
+							"required":    true,
+							"schema": map[string]interface{}{"type": "integer"},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{
+							"description": "Email marked as unread.",
+							"content": map[string]interface{}{
+								"application/json": map[string]interface{}{
+									"schema": map[string]interface{}{
+										"type": "object",
+										"properties": map[string]interface{}{
+											"status": map[string]interface{}{"type": "string"},
+										},
+									},
+								},
+							},
+						},
+						"400": map[string]interface{}{
+							"description": "Invalid email ID.",
+						},
+						"404": map[string]interface{}{
+							"description": "Email not found or no store configured.",
+						},
+					},
+				},
+			},
 			"/api/emails": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Fetch recent emails",

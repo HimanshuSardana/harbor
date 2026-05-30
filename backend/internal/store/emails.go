@@ -2,6 +2,10 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -143,6 +147,124 @@ func (s *Store) SetSyncStateBackfill(mailbox string, uidFirst uint32) error {
 			updated_at = datetime('now')`,
 		mailbox, uidFirst)
 	return err
+}
+
+// GetEmail returns a single email row by its database ID.
+func (s *Store) GetEmail(id int64) (*EmailRow, error) {
+	row := s.DB.QueryRow(`
+		SELECT id, mailbox, imap_uid, filename, subject, from_addr, date, body_text, body_html, flags
+		FROM emails WHERE id = ?`, id)
+	var r EmailRow
+	var bodyText, bodyHTML sql.NullString
+	err := row.Scan(&r.ID, &r.Mailbox, &r.IMAPUID, &r.Filename,
+		&r.Subject, &r.FromAddr, &r.Date, &bodyText, &bodyHTML, &r.Flags)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	r.BodyText = bodyText.String
+	r.BodyHTML = bodyHTML.String
+	return &r, nil
+}
+
+// MarkSeen adds the Seen flag (S) to the email's flags.
+func (s *Store) MarkSeen(id int64) error {
+	e, err := s.GetEmail(id)
+	if err != nil {
+		return err
+	}
+	if e == nil {
+		return fmt.Errorf("email not found")
+	}
+	newFlags := setFlag(e.Flags, "S")
+	if newFlags == e.Flags {
+		return nil // already seen
+	}
+	return s.updateEmailFlags(id, newFlags, e.Filename, true)
+}
+
+// MarkUnread removes the Seen flag (S) from the email's flags.
+func (s *Store) MarkUnread(id int64) error {
+	e, err := s.GetEmail(id)
+	if err != nil {
+		return err
+	}
+	if e == nil {
+		return fmt.Errorf("email not found")
+	}
+	newFlags := clearFlag(e.Flags, "S")
+	if newFlags == e.Flags {
+		return nil // already unread
+	}
+	return s.updateEmailFlags(id, newFlags, e.Filename, false)
+}
+
+// updateEmailFlags updates the flags column in the DB and renames the maildir
+// file to reflect the new flags.
+func (s *Store) updateEmailFlags(id int64, flags, filename string, seen bool) error {
+	// Rename the maildir file to reflect updated flags.
+	newName := maildirFilenameWithFlags(filename, seen)
+	if newName != filename {
+		oldPath := filepath.Join(s.Maildir, filename)
+		newPath := filepath.Join(s.Maildir, newName)
+		if err := os.Rename(oldPath, newPath); err != nil {
+			// Non-fatal — log but still update DB.
+			fmt.Fprintf(os.Stderr, "warn: rename maildir %s -> %s: %v\n", oldPath, newPath, err)
+		}
+	}
+
+	_, err := s.DB.Exec(`UPDATE emails SET flags = ?, filename = ? WHERE id = ?`, flags, newName, id)
+	return err
+}
+
+// setFlag ensures a single-char flag (e.g. "S") is present in the flags string.
+func setFlag(flags, flag string) string {
+	if strings.Contains(flags, flag) {
+		return flags
+	}
+	// Maildir convention: flags sorted SFRDT (Seen, Flagged, Replied, Deleted, Draft).
+	return sortFlags(flags + flag)
+}
+
+// clearFlag removes a single-char flag from the flags string.
+func clearFlag(flags, flag string) string {
+	return strings.ReplaceAll(flags, flag, "")
+}
+
+// sortFlags sorts the flags string in maildir convention: S F R T D.
+func sortFlags(flags string) string {
+	order := []string{"S", "F", "R", "T", "D"}
+	var out string
+	for _, ch := range order {
+		if strings.Contains(flags, ch) {
+			out += ch
+		}
+	}
+	return out
+}
+
+// maildirFilenameWithFlags returns a new maildir filename with flags updated
+// to reflect whether the message is seen.
+func maildirFilenameWithFlags(filename string, seen bool) string {
+	// Maildir filename format: {info}:2,{flags}
+	// The part after ":2," is the flags.
+	i := strings.LastIndex(filename, ":2,")
+	if i < 0 {
+		// Not a proper maildir name — leave as-is.
+		return filename
+	}
+	oldFlags := filename[i+3:]
+	newFlags := oldFlags
+	if seen {
+		if !strings.Contains(oldFlags, "S") {
+			newFlags = sortFlags(oldFlags + "S")
+		}
+	} else {
+		newFlags = strings.ReplaceAll(oldFlags, "S", "")
+	}
+	return filename[:i+3] + newFlags
 }
 
 // ParseTimeOrFallback tries to parse an RFC3339 time, returning a zero time on failure.

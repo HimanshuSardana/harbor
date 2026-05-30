@@ -174,6 +174,60 @@ func (h *Handler) SyncNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": msg})
 }
 
+// MarkSeen marks an email as read (seen).
+//
+//	PATCH /api/emails/{id}/seen
+func (h *Handler) MarkSeen(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no store configured"})
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email id"})
+		return
+	}
+
+	if err := h.Store.MarkSeen(id); err != nil {
+		if err.Error() == "email not found" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "email not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// MarkUnread marks an email as unread (removes the seen flag).
+//
+//	PATCH /api/emails/{id}/unread
+func (h *Handler) MarkUnread(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no store configured"})
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email id"})
+		return
+	}
+
+	if err := h.Store.MarkUnread(id); err != nil {
+		if err.Error() == "email not found" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "email not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // Health check endpoint.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -204,7 +258,7 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		if r.Method == http.MethodOptions {
