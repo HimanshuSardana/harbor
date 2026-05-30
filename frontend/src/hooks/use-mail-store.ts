@@ -72,6 +72,9 @@ export function useMailStore() {
 	const activeMailbox = currentAccount || undefined;
 	const activeMailboxRef = useRef(activeMailbox);
 	activeMailboxRef.current = activeMailbox;
+
+	// Monotonically increasing version to discard stale fetch responses
+	const fetchVersionRef = useRef(0);
 	const [searchResultIndex, setSearchResultIndex] = useState(0);
 	const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -98,18 +101,22 @@ export function useMailStore() {
 
 	// ── Initial fetch ──
 	const fetchData = useCallback(async (silent = false) => {
+		const version = ++fetchVersionRef.current;
 		if (!silent) setLoading(true);
 		setError(null);
 		offsetRef.current = 0;
+		const mb = activeMailboxRef.current;
 		try {
 			const [emailsData, accountsData] = await Promise.all([
-				fetchEmails(PAGE_SIZE, 0, activeMailbox),
+				fetchEmails(PAGE_SIZE, 0, mb),
 				fetchAccounts(),
 			]);
+			// Discard stale responses from a previous account switch
+			if (version !== fetchVersionRef.current) return;
 			setEmails(emailsData);
 			setAccounts(accountsData);
 			const total = typeof window !== "undefined" && "__TAURI__" in window
-				? await (await import("@/lib/tauri-api")).fetchTotalEmailCount()
+				? await (await import("@/lib/tauri-api")).fetchTotalEmailCount(mb)
 				: 0;
 			if (total > 0) {
 				setHasMore(emailsData.length < total);
@@ -119,10 +126,13 @@ export function useMailStore() {
 				offsetRef.current = emailsData.length;
 			}
 		} catch (e: unknown) {
+			if (version !== fetchVersionRef.current) return;
 			setError(e instanceof Error ? e.message : "Unknown error");
 		} finally {
-			setLoading(false);
-			setRefreshing(false);
+			if (version === fetchVersionRef.current) {
+				setLoading(false);
+				setRefreshing(false);
+			}
 		}
 	}, []);
 
@@ -138,6 +148,7 @@ export function useMailStore() {
 
 	// ── Switch account handler + re-fetch on account change ──
 	const switchAccount = useCallback((email: string) => {
+		fetchVersionRef.current++; // invalidate any in-flight fetch
 		setCurrentAccount(email);
 		setAccountPickerOpen(false);
 		setEmails([]); // clear old account's emails immediately
@@ -181,7 +192,7 @@ export function useMailStore() {
 				offsetRef.current = offset + data.length;
 				backfillRetryRef.current = 0;
 				const total = typeof window !== "undefined" && "__TAURI__" in window
-					? await (await import("@/lib/tauri-api")).fetchTotalEmailCount()
+					? await (await import("@/lib/tauri-api")).fetchTotalEmailCount(mb)
 					: 0;
 				if (total > 0) {
 					setHasMore(offset + data.length < total);

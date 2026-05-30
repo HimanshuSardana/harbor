@@ -57,7 +57,7 @@ function toEmail(e: TauriEmail): Email {
 
 export async function fetchEmails(limit: number, offset: number, mailbox?: string): Promise<Email[]> {
 	if (isTauri()) {
-		const rows = await tauriInvoke<TauriEmail[]>("get_emails", { limit, offset });
+		const rows = await tauriInvoke<TauriEmail[]>("get_emails", { limit, offset, mailbox: mailbox ?? null });
 		return rows.map(toEmail).reverse(); // Ensure newest-first order
 	}
 	// Fallback: HTTP API
@@ -102,9 +102,9 @@ export async function fetchEmlContent(filename: string): Promise<string> {
 	throw new Error("EML content requires Tauri runtime");
 }
 
-export async function fetchTotalEmailCount(): Promise<number> {
+export async function fetchTotalEmailCount(mailbox?: string): Promise<number> {
 	if (isTauri()) {
-		return tauriInvoke<number>("get_total_email_count");
+		return tauriInvoke<number>("get_total_email_count", { mailbox: mailbox ?? null });
 	}
 	// Fallback: not critical, just return 0 or a high number.
 	return 0;

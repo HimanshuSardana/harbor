@@ -38,19 +38,36 @@ fn open_db() -> Result<rusqlite::Connection, String> {
 // ── Commands ──
 
 #[tauri::command]
-fn get_emails(limit: u32, offset: u32) -> Result<Vec<Email>, String> {
+fn get_emails(limit: u32, offset: u32, mailbox: Option<String>) -> Result<Vec<Email>, String> {
     let conn = open_db()?;
-    let mut stmt = conn
-        .prepare(
+
+    let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ref mb) = mailbox {
+        (
+            "SELECT id, mailbox, subject, from_addr, date, body_text, body_html, filename
+             FROM emails
+             WHERE mailbox = ?1
+             ORDER BY id DESC
+             LIMIT ?2 OFFSET ?3"
+                .to_string(),
+            vec![Box::new(mb.clone()), Box::new(limit), Box::new(offset)],
+        )
+    } else {
+        (
             "SELECT id, mailbox, subject, from_addr, date, body_text, body_html, filename
              FROM emails
              ORDER BY id DESC
-             LIMIT ?1 OFFSET ?2",
+             LIMIT ?1 OFFSET ?2"
+                .to_string(),
+            vec![Box::new(limit), Box::new(offset)],
         )
-        .map_err(|e| format!("Query prepare failed: {e}"))?;
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Query prepare failed: {e}"))?;
+
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let rows = stmt
-        .query_map([limit, offset], |row| {
+        .query_map(params_refs.as_slice(), |row| {
             Ok(Email {
                 id: row.get(0)?,
                 mailbox: row.get::<_, String>(1).unwrap_or_default(),
@@ -102,11 +119,17 @@ fn get_eml_content(filename: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_total_email_count() -> Result<u32, String> {
+fn get_total_email_count(mailbox: Option<String>) -> Result<u32, String> {
     let conn = open_db()?;
-    let count: u32 = conn
-        .query_row("SELECT COUNT(*) FROM emails", [], |row| row.get(0))
-        .map_err(|e| format!("Count query failed: {e}"))?;
+    let count: u32 = if let Some(ref mb) = mailbox {
+        conn
+            .query_row("SELECT COUNT(*) FROM emails WHERE mailbox = ?1", [mb], |row| row.get(0))
+            .map_err(|e| format!("Count query failed: {e}"))?
+    } else {
+        conn
+            .query_row("SELECT COUNT(*) FROM emails", [], |row| row.get(0))
+            .map_err(|e| format!("Count query failed: {e}"))?
+    };
     Ok(count)
 }
 

@@ -20,8 +20,8 @@ import (
 	"github.com/HimanshuSardana/harbor/backend/internal/store"
 )
 
-const syncBatchSize   = 50    // max new emails per forward sync
-const backfillBatchSize = 50  // max old emails per backfill request
+const syncBatchSize = 50     // max new emails per forward sync
+const backfillBatchSize = 50 // max old emails per backfill request
 
 // SyncOlder fetches up to count messages before the oldest synced UID.
 // This is a backfill — it reaches backwards into the mailbox history.
@@ -127,14 +127,15 @@ func SyncOlder(account config.Account, st *store.Store, count int) error {
 		return fmt.Errorf("fetch: %w", fetchErr)
 	}
 
-	// Update the uid_first boundary so subsequent backfills go further back.
+	newUidFirst := start
 	if synced > 0 {
-		if err := st.SetSyncStateBackfill(mailbox, oldestUID); err != nil {
-			return fmt.Errorf("save backfill state: %w", err)
-		}
+		newUidFirst = oldestUID
+	}
+	if err := st.SetSyncStateBackfill(mailbox, newUidFirst); err != nil {
+		return fmt.Errorf("save backfill state: %w", err)
 	}
 
-	log.Printf("[backfill] %s: done — %d synced, uid_first now %d", mailbox, synced, oldestUID)
+	log.Printf("[backfill] %s: done — %d synced, uid_first now %d", mailbox, synced, newUidFirst)
 	return nil
 }
 
