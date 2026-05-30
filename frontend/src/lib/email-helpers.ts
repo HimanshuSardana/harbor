@@ -107,10 +107,18 @@ export function buildIframeDoc(email: Email): string {
 export function stripHtml(html: string): string {
 	return html
 		.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+		// Insert newlines before block-level tags so paragraph structure is preserved
+		.replace(/<\/(p|div|h[1-6]|li|tr|blockquote|pre|section|article|header|footer|table)>/gi, "\n")
+		.replace(/<br\s*\/?>/gi, "\n")
 		.replace(/<[^>]+>/g, "")
 		.replace(/&amp;/g, "&")
 		.replace(/&nbsp;/g, " ")
-		.replace(/\s+/g, " ")
+		// Normalize line endings
+		.replace(/\r\n/g, "\n")
+		// Collapse horizontal whitespace (tabs, multiple spaces) but preserve newlines
+		.replace(/[ \t]+/g, " ")
+		// Collapse runs of blank lines into at most one
+		.replace(/\n{3,}/g, "\n\n")
 		.trim();
 }
 
