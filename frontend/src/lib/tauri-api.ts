@@ -63,7 +63,7 @@ export async function fetchEmails(limit: number, offset: number): Promise<Email[
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
 	const data = await res.json();
 	// API returns oldest-first within batch; reverse for newest-at-top.
-	return data.reverse().map((e: any) => ({
+	return data.map((e: any) => ({
 		subject: e.subject || "",
 		from_addr: e.from_addr || e.from || "",
 		date: e.date || "",
