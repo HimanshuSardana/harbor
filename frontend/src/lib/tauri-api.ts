@@ -100,3 +100,15 @@ export async function fetchTotalEmailCount(): Promise<number> {
 	// Fallback: not critical, just return 0 or a high number.
 	return 0;
 }
+
+/**
+ * Trigger a backfill sync on the backend.
+ * Fetches N older messages from the IMAP server before the oldest cached one.
+ * Works in both Tauri and browser mode by hitting the HTTP API directly.
+ */
+export async function triggerBackfill(count: number): Promise<void> {
+	const res = await fetch(`${API_BASE}/api/sync?backfill=${count}`, { method: "POST" });
+	if (!res.ok) throw new Error(`Backfill API error: ${res.status}`);
+	// The response is 202 — sync is async, we don't wait for completion.
+	await res.json();
+}

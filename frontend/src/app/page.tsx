@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
 import { Vim, vim } from "@replit/codemirror-vim";
-import { fetchEmails, fetchAccounts } from "@/lib/tauri-api";
+import { fetchEmails, fetchAccounts, triggerBackfill } from "@/lib/tauri-api";
 
 type Email = {
 	subject: string;
@@ -157,6 +157,8 @@ export default function App() {
 	const [accounts, setAccounts] = useState<Account[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [loadingMore, setLoadingMore] = useState(false);
+	const [backfilling, setBackfilling] = useState(false);
+	const [backfillExhausted, setBackfillExhausted] = useState(false);
 	const [hasMore, setHasMore] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
@@ -172,6 +174,10 @@ export default function App() {
 	const numCompRef = useRef(new Compartment());
 	const exDefined = useRef(false);
 	const offsetRef = useRef(0);
+	const backfillingRef = useRef(false);
+	const backfillRetryRef = useRef(0);
+	const backfillExhaustedRef = useRef(false);
+	const lastGKeyTimeRef = useRef(0);
 
 	// Resizing States
 	const [col1Width, setCol1Width] = useState(240);
@@ -237,10 +243,15 @@ export default function App() {
 				? await (await import("@/lib/tauri-api")).fetchTotalEmailCount()
 				: 0;
 			if (total > 0) {
+				// Tauri mode — we know the exact count
 				setHasMore(emailsData.length < total);
 				offsetRef.current = emailsData.length;
 			} else {
-				setHasMore(emailsData.length === PAGE_SIZE);
+				// HTTP mode — no total count known.
+				// Assume more may exist on the IMAP server until a backfill
+				// attempt proves otherwise. This lets infinite scroll + backfill work.
+				setHasMore(emailsData.length > 0);
+				offsetRef.current = emailsData.length;
 			}
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : "Unknown error";
@@ -253,28 +264,74 @@ export default function App() {
 
 	useEffect(() => { fetchData(); }, [fetchData]);
 
-	// ── Load more (infinite scroll) ──
+	// Reset backfill-exhausted when we have data (initial load or refresh)
+	useEffect(() => {
+		if (emails.length > 0) {
+			setBackfillExhausted(false);
+			backfillExhaustedRef.current = false;
+		}
+	}, [emails.length]);
+
+	// ── Load more (infinite scroll) with backfill support ──
 	const loadMoreEmails = useCallback(async () => {
-		if (!hasMore || loadingMore) return;
+		if (!hasMore || loadingMore || backfillingRef.current) return;
 		setLoadingMore(true);
 		try {
 			const offset = offsetRef.current;
 			const data = await fetchEmails(PAGE_SIZE, offset);
-			// Tauri API returns newest-first already (SQLite ORDER BY id DESC).
-			// HTTP fallback reverses internally.
-			// No reverse needed here — just append.
+
 			if (data.length > 0) {
+				// Got more cached emails — append and continue
 				setEmails(prev => [...prev, ...data]);
 				offsetRef.current = offset + data.length;
+				backfillRetryRef.current = 0;
 				// Check total to determine if there's more
 				const total = typeof window !== "undefined" && "__TAURI__" in window
 					? await (await import("@/lib/tauri-api")).fetchTotalEmailCount()
 					: 0;
 				if (total > 0) {
+					// Tauri mode — exact count known
 					setHasMore(offset + data.length < total);
+				} else {
+					// HTTP mode — keep hasMore alive so we can backfill
+					// when the cache eventually runs dry
+					setHasMore(true);
 				}
+			} else {
+				// No more cached emails → trigger a backfill sync
+				setLoadingMore(false);
+				backfillingRef.current = true;
+				setBackfilling(true);
+				try {
+					await triggerBackfill(20);
+					// Backend sync is async; poll for new data with backoff
+					let newData: Email[] = [];
+					const maxRetries = 6;
+					for (let attempt = 0; attempt < maxRetries; attempt++) {
+						await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+						newData = await fetchEmails(PAGE_SIZE, offset);
+						if (newData.length > 0) break;
+					}
+					if (newData.length > 0) {
+						setEmails(prev => [...prev, ...newData]);
+						offsetRef.current = offset + newData.length;
+						backfillRetryRef.current = 0;
+						setHasMore(newData.length >= PAGE_SIZE);
+					} else {
+						// Backfill returned nothing — IMAP has no more older messages
+						setHasMore(false);
+						setBackfillExhausted(true);
+						backfillExhaustedRef.current = true;
+					}
+				} catch {
+					// backfill failed silently
+				} finally {
+					backfillingRef.current = false;
+					setBackfilling(false);
+					setLoadingMore(false);
+				}
+				return;
 			}
-			if (data.length < PAGE_SIZE) setHasMore(false);
 		} catch {
 			// silently swallow load-more errors
 		} finally {
@@ -287,7 +344,7 @@ export default function App() {
 		const el = listRef.current;
 		if (!el) return;
 		const onScroll = () => {
-			if (!hasMore || loadingMore) return;
+			if (!hasMore || loadingMore || backfillingRef.current || backfillExhaustedRef.current) return;
 			const { scrollTop, scrollHeight, clientHeight } = el;
 			if (scrollHeight - scrollTop - clientHeight < 300) {
 				loadMoreEmails();
@@ -586,6 +643,7 @@ export default function App() {
 				case 'j':
 					if (focusedPanel === 'list' && emails.length > 0) {
 						e.preventDefault();
+						lastGKeyTimeRef.current = 0;
 						setSelectedIdx(p => p === null ? 0 : Math.min(p + 1, emails.length - 1));
 					} else if (focusedPanel === 'reader' && iframeRef.current?.contentWindow) {
 						e.preventDefault();
@@ -593,9 +651,39 @@ export default function App() {
 					}
 					break;
 
+				case 'g':
+					if (focusedPanel === 'list' && emails.length > 0) {
+						e.preventDefault();
+						const now = Date.now();
+						if (now - lastGKeyTimeRef.current < 400) {
+							// gg — go to top
+							lastGKeyTimeRef.current = 0;
+							setSelectedIdx(0);
+						} else {
+							lastGKeyTimeRef.current = now;
+							// Auto-clear after timeout so a lone 'g' doesn't
+							// pair with a future 'g' press
+							setTimeout(() => {
+								if (lastGKeyTimeRef.current === now) {
+									lastGKeyTimeRef.current = 0;
+								}
+							}, 400);
+						}
+					}
+					break;
+
+				case 'G':
+					if (focusedPanel === 'list' && emails.length > 0) {
+						e.preventDefault();
+						lastGKeyTimeRef.current = 0;
+						setSelectedIdx(emails.length - 1);
+					}
+					break;
+
 				case 'k':
 					if (focusedPanel === 'list' && emails.length > 0) {
 						e.preventDefault();
+						lastGKeyTimeRef.current = 0;
 						setSelectedIdx(p => p === null ? 0 : Math.max(p - 1, 0));
 					} else if (focusedPanel === 'reader' && iframeRef.current?.contentWindow) {
 						e.preventDefault();
@@ -665,6 +753,9 @@ export default function App() {
 		setVisualMode(false);
 		setPlainText("");
 		setHasMore(true);
+		setBackfillExhausted(false);
+		backfillExhaustedRef.current = false;
+		backfillingRef.current = false;
 		if (cmViewRef.current) { cmViewRef.current.destroy(); cmViewRef.current = null; }
 		fetchData(true);
 	};
@@ -786,7 +877,15 @@ export default function App() {
 									);
 								})}
 								{/* Infinite scroll sentinel */}
-								{loadingMore && (
+								{backfilling && (
+									<div className="flex items-center justify-center gap-1.5 px-4 py-4">
+										<svg className="h-3.5 w-3.5 animate-spin text-zinc-500" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+											<path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+										</svg>
+										<span className="ml-1.5 text-[10px] font-mono uppercase tracking-wider text-amber-500/80">Backfilling older messages…</span>
+									</div>
+								)}
+								{!backfilling && loadingMore && (
 									<div className="flex items-center justify-center gap-1.5 px-4 py-4">
 										{[0, 1, 2].map(i => (
 											<span key={i} className="h-1 w-1 animate-bounce rounded-full bg-zinc-500" style={{ animationDelay: `${i * 0.15}s` }} />
@@ -795,7 +894,23 @@ export default function App() {
 									</div>
 								)}
 								{!hasMore && emails.length > 0 && (
-									<div className="px-4 py-4 text-center text-[10px] font-mono text-zinc-600">No more messages</div>
+									<div className="px-4 py-4 text-center">
+										<p className="text-[10px] font-mono text-zinc-600">
+											{backfillExhausted ? "All messages loaded from IMAP" : "No more messages"}
+										</p>
+										{backfillExhausted && (
+											<button
+												onClick={() => {
+													setBackfillExhausted(false);
+													backfillExhaustedRef.current = false;
+													setHasMore(true);
+												}}
+												className="mt-2 text-[9px] font-mono text-zinc-500 hover:text-zinc-300 underline underline-offset-2 decoration-zinc-700"
+											>
+												Retry backfill
+											</button>
+										)}
+									</div>
 								)}
 							</div>
 						</div>
@@ -868,7 +983,7 @@ export default function App() {
 			{/* ── Status bar ── */}
 			<footer className="flex items-center justify-between border-t border-zinc-900 bg-black px-4 text-[10px] font-mono text-zinc-500 pb-2 pt-2">
 				<span className="flex items-center gap-2">
-					{error ? "⚠ disconnected" : loading ? "connecting…" : loadingMore ? `⟳ loading more… (${emails.length})` : emails.length > 0 ? `${emails.length} messages` : "ready"}
+					{error ? "⚠ disconnected" : loading ? "connecting…" : backfilling ? `⟳ backfilling… (${emails.length})` : loadingMore ? `⟳ loading more… (${emails.length})` : emails.length > 0 ? `${emails.length} messages` : "ready"}
 					{visualMode && focusedPanel === 'reader' && plainText && (
 						<span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-green-800/50 text-green-300">
 							-- VIM --
