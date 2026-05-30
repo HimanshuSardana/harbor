@@ -42,3 +42,12 @@ func LoadConfig(path string) (*Config, error) {
 
 	return &cfg, nil
 }
+
+// SaveConfig writes the config to a TOML file at the given path.
+func SaveConfig(path string, cfg *Config) error {
+	data, err := toml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}

@@ -74,6 +74,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.Health)
 	mux.HandleFunc("GET /api/accounts", h.GetAccounts)
+	mux.HandleFunc("POST /api/accounts", h.AddAccount)
 	mux.HandleFunc("GET /api/emails", h.GetEmails)
 	mux.HandleFunc("GET /api/search", h.SearchEmails)
 	mux.HandleFunc("POST /api/sync", h.SyncNow)

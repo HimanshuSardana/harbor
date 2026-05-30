@@ -241,6 +241,65 @@ func (h *Handler) MarkUnread(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// AddAccount creates a new IMAP account and persists it to the config file.
+//
+//	POST /api/accounts  { "name": "...", "email": "...", "password": "...", "imap_host": "...", "imap_port": 993, "smtp_host": "...", "smtp_port": 587 }
+func (h *Handler) AddAccount(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name     string `json:"name"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		ImapHost string `json:"imap_host"`
+		ImapPort int    `json:"imap_port"`
+		SmtpHost string `json:"smtp_host"`
+		SmtpPort int    `json:"smtp_port"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if body.Email == "" || body.Password == "" || body.ImapHost == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email, password, and imap_host are required"})
+		return
+	}
+
+	if body.ImapPort == 0 {
+		body.ImapPort = 993
+	}
+	if body.SmtpPort == 0 {
+		body.SmtpPort = 587
+	}
+
+	// Check for duplicate.
+	for _, a := range h.cfg.Accounts {
+		if a.Email == body.Email {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "account already exists"})
+			return
+		}
+	}
+
+	account := config.Account{
+		Name:     body.Name,
+		Email:    body.Email,
+		Password: body.Password,
+		ImapHost: body.ImapHost,
+		ImapPort: body.ImapPort,
+		SmtpHost: body.SmtpHost,
+		SmtpPort: body.SmtpPort,
+	}
+
+	h.cfg.Accounts = append(h.cfg.Accounts, account)
+
+	if err := config.SaveConfig(h.configPath, h.cfg); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save config: " + err.Error()})
+		return
+	}
+
+	log.Printf("[accounts] added %s (%s)", body.Email, body.Name)
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok", "email": body.Email})
+}
+
 // Health check endpoint.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
