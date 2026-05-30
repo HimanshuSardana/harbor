@@ -6,7 +6,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { Vim, vim } from "@replit/codemirror-vim";
 import { fetchEmails, fetchAccounts, triggerSync, triggerBackfill, markSeen, markUnread } from "@/lib/tauri-api";
 import { buildIframeDoc, stripHtml, searchEmails } from "@/lib/email-helpers";
-import type { Email } from "@/lib/types";
+import type { Email, Account } from "@/lib/types";
 
 const PAGE_SIZE = 50;
 
@@ -16,7 +16,9 @@ export type Theme = "default" | "catppuccin";
 export function useMailStore() {
 	// ── Data state ──
 	const [emails, setEmails] = useState<Email[]>([]);
-	const [accounts, setAccounts] = useState<{ email: string }[]>([]);
+	const [accounts, setAccounts] = useState<Account[]>([]);
+	const [currentAccount, setCurrentAccount] = useState<string>("");
+	const [accountPickerOpen, setAccountPickerOpen] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const [loadingMore, setLoadingMore] = useState(false);
 	const [backfilling, setBackfilling] = useState(false);
@@ -65,6 +67,11 @@ export function useMailStore() {
 	// ── UI state: search ──
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
+
+	// Active mailbox derived from currentAccount (empty = first/default account)
+	const activeMailbox = currentAccount || undefined;
+	const activeMailboxRef = useRef(activeMailbox);
+	activeMailboxRef.current = activeMailbox;
 	const [searchResultIndex, setSearchResultIndex] = useState(0);
 	const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -96,7 +103,7 @@ export function useMailStore() {
 		offsetRef.current = 0;
 		try {
 			const [emailsData, accountsData] = await Promise.all([
-				fetchEmails(PAGE_SIZE, 0),
+				fetchEmails(PAGE_SIZE, 0, activeMailbox),
 				fetchAccounts(),
 			]);
 			setEmails(emailsData);
@@ -129,13 +136,45 @@ export function useMailStore() {
 		}
 	}, [emails.length]);
 
+	// ── Switch account handler + re-fetch on account change ──
+	const switchAccount = useCallback((email: string) => {
+		setCurrentAccount(email);
+		setAccountPickerOpen(false);
+		setEmails([]); // clear old account's emails immediately
+		setSelectedIdx(null);
+		setVisualMode(false);
+		setPlainText("");
+		setLoading(true); // show loading state for new account
+		setError(null);
+		setHasMore(true);
+		setBackfillExhausted(false);
+		backfillExhaustedRef.current = false;
+		backfillingRef.current = false;
+		offsetRef.current = 0;
+		if (cmViewRef.current) {
+			cmViewRef.current.destroy();
+			cmViewRef.current = null;
+		}
+	}, []);
+
+	useEffect(() => {
+		if (accounts.length > 0 && currentAccount !== "") {
+			fetchData(false); // non-silent so setLoading(true) is also set here
+		} else if (accounts.length > 0 && currentAccount === "") {
+			// Switching back to default — also re-fetch
+			fetchData(false);
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [currentAccount]);
+
 	// ── Load more (infinite scroll) with backfill support ──
 	const loadMoreEmails = useCallback(async () => {
 		if (!hasMore || loadingMore || backfillingRef.current) return;
 		setLoadingMore(true);
 		try {
 			const offset = offsetRef.current;
-			const data = await fetchEmails(PAGE_SIZE, offset);
+			const mb = activeMailboxRef.current;
+			const data = await fetchEmails(PAGE_SIZE, offset, mb);
 
 			if (data.length > 0) {
 				setEmails(prev => [...prev, ...data]);
@@ -154,12 +193,12 @@ export function useMailStore() {
 				backfillingRef.current = true;
 				setBackfilling(true);
 				try {
-					await triggerBackfill(20);
+					await triggerBackfill(20, mb);
 					let newData: Email[] = [];
 					const maxRetries = 6;
 					for (let attempt = 0; attempt < maxRetries; attempt++) {
 						await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-						newData = await fetchEmails(PAGE_SIZE, offset);
+						newData = await fetchEmails(PAGE_SIZE, offset, mb);
 						if (newData.length > 0) break;
 					}
 					if (newData.length > 0) {
@@ -410,6 +449,15 @@ export function useMailStore() {
 			return;
 		}
 
+		// Account picker — Escape to close
+		if (accountPickerOpen) {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				setAccountPickerOpen(false);
+			}
+			return;
+		}
+
 		// Visual mode in reader — only intercept 2/3
 		if (visualMode && focusedPanel === "reader") {
 			switch (e.key) {
@@ -436,6 +484,15 @@ export function useMailStore() {
 		if ((e.ctrlKey || e.metaKey) && e.key === "b") {
 			e.preventDefault();
 			setSidebarOpen(p => !p);
+			return;
+		}
+
+		// Shift+A: open account picker
+		if (e.shiftKey && e.key === "A") {
+			e.preventDefault();
+			if (accounts.length > 1) {
+				setAccountPickerOpen(true);
+			}
 			return;
 		}
 
@@ -579,7 +636,7 @@ export function useMailStore() {
 					e.preventDefault();
 					lastGKeyTimeRef.current = 0;
 					setRefreshing(true);
-					triggerSync().then(() => {
+					triggerSync(activeMailboxRef.current).then(() => {
 						setTimeout(() => fetchData(true), 1500);
 					}).catch(() => setRefreshing(false));
 				}
@@ -593,7 +650,7 @@ export function useMailStore() {
 					setBackfilling(true);
 					setBackfillExhausted(false);
 					backfillExhaustedRef.current = false;
-					triggerBackfill(20)
+					triggerBackfill(20, activeMailboxRef.current)
 						.then(() => new Promise(r => setTimeout(r, 1500)))
 						.then(() => fetchData(true))
 						.then(() => {
@@ -628,7 +685,7 @@ export function useMailStore() {
 				}
 				break;
 		}
-	}, [focusedPanel, visualMode, emails, selectedIdx, plainText, paletteOpen, searchOpen, searchQuery, loading, refreshing, backfilling, loadingMore, fetchData]);
+	}, [focusedPanel, visualMode, emails, selectedIdx, plainText, paletteOpen, searchOpen, searchQuery, accountPickerOpen, accounts, loading, refreshing, backfilling, loadingMore, fetchData]);
 
 	useEffect(() => {
 		window.addEventListener("keydown", handleKeyDown);
@@ -750,6 +807,13 @@ export function useMailStore() {
 		setSearchQuery,
 		setSearchResultIndex,
 		resetSearchResultIndex,
+
+		// Account state
+		currentAccount,
+		activeMailbox,
+		accountPickerOpen,
+		setAccountPickerOpen,
+		switchAccount,
 
 		// Handlers
 		fetchData,

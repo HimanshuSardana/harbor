@@ -19,6 +19,8 @@ export default function App() {
 		setSettingsOpen, setTheme,
 		searchOpen, searchQuery, searchResultIndex,
 		setSearchOpen, setSearchQuery, setSearchResultIndex,
+		currentAccount, activeMailbox, accountPickerOpen,
+		setAccountPickerOpen, switchAccount,
 		fetchData, handleRefresh,
 		startDragging1, startDragging2,
 		selectedEmail, isDraggingAny, COMMANDS,
@@ -59,17 +61,30 @@ export default function App() {
 							<div className="border-t border-zinc-900">
 								<div className={`flex items-center px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-zinc-500 ${sidebarOpen ? "justify-between" : "justify-center"}`}>
 									<span className={sidebarOpen ? "" : "hidden"}>Accounts</span>
+									{accounts.length > 1 && sidebarOpen && (
+										<button
+											onClick={() => setAccountPickerOpen(true)}
+											className="text-[9px] font-mono text-zinc-500 hover:text-zinc-300 underline underline-offset-2 decoration-zinc-700"
+										>
+											{currentAccount ? "Switch" : `${accounts.length} accts`}
+										</button>
+									)}
 								</div>
 								{accounts.map((acc) => {
 									const name = acc.email.split("@")[0];
+									const isActive = acc.email === (currentAccount || accounts[0].email);
 									return (
-										<div key={acc.email} className={`flex items-center ${sidebarOpen ? "gap-2.5 px-4" : "gap-0 justify-center px-0"} py-3 text-xs transition bg-black hover:bg-zinc-950/60`}>
+										<button
+											key={acc.email}
+											onClick={() => switchAccount(isActive ? "" : acc.email)}
+											className={`w-full flex items-center ${sidebarOpen ? "gap-2.5 px-4" : "gap-0 justify-center px-0"} py-3 text-xs transition ${isActive ? "bg-zinc-900 ring-1 ring-inset ring-zinc-600" : "bg-black hover:bg-zinc-950/60"}`}
+										>
 											<span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-zinc-800 text-[8px] font-bold text-zinc-400">{name[0]?.toUpperCase()}</span>
-											<div className={`truncate min-w-0 ${sidebarOpen ? "" : "hidden"}`}>
-												<p className="text-zinc-300 truncate">{name}</p>
+											<div className={`truncate min-w-0 text-left ${sidebarOpen ? "" : "hidden"}`}>
+												<p className={`truncate ${isActive ? "font-semibold text-white" : "text-zinc-300"}`}>{acc.name || name}</p>
 												<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
 											</div>
-										</div>
+										</button>
 									);
 								})}
 							</div>
@@ -251,7 +266,7 @@ export default function App() {
 						</span>
 					)}
 				</span>
-				<span>{accounts.length > 0 ? accounts[0].email : "no account connected"} · port 3002</span>
+				<span>{accounts.length > 0 ? (currentAccount || accounts[0].email) : "no account connected"} · port 3002</span>
 			</footer>
 
 			{/* ── Command Palette Overlay ── */}
@@ -511,6 +526,63 @@ export default function App() {
 										</button>
 									);
 								})
+							)}
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* ── Account Picker ── */}
+			{accountPickerOpen && (
+				<div
+					className="fixed inset-0 z-50 flex items-center justify-center"
+					onClick={() => setAccountPickerOpen(false)}
+				>
+					<div className="absolute inset-0 bg-black/60" />
+					<div
+						className="relative w-full max-w-sm rounded-lg border border-zinc-800 bg-zinc-950 p-4 shadow-2xl shadow-black/60"
+						onClick={e => e.stopPropagation()}
+					>
+						<div className="flex items-center justify-between mb-4">
+							<h2 className="text-sm font-bold text-white tracking-tight">Select Account</h2>
+							<button onClick={() => setAccountPickerOpen(false)} className="text-zinc-500 hover:text-zinc-300 transition">
+								<svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+									<path d="M6 18L18 6M6 6l12 12" />
+								</svg>
+							</button>
+						</div>
+						<div className="space-y-1">
+							{accounts.map((acc) => {
+								const isActive = acc.email === (currentAccount || accounts[0].email);
+								const name = acc.email.split("@")[0];
+								return (
+									<button
+										key={acc.email}
+										onClick={() => switchAccount(isActive ? "" : acc.email)}
+										className={`w-full flex items-center gap-3 rounded-lg px-4 py-3 text-left text-xs transition ${isActive ? "bg-zinc-800 ring-1 ring-inset ring-zinc-600" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"}`}
+									>
+										<span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-700 text-[9px] font-bold text-zinc-300">
+											{name[0]?.toUpperCase()}
+										</span>
+										<div className="min-w-0 flex-1">
+											<p className={`truncate ${isActive ? "font-semibold text-white" : ""}`}>{acc.name || name}</p>
+											<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
+										</div>
+										{isActive && (
+											<svg className="h-4 w-4 shrink-0 text-blue-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+												<path d="M5 13l4 4L19 7" />
+											</svg>
+										)}
+									</button>
+								);
+							})}
+							{currentAccount && (
+								<button
+									onClick={() => switchAccount("")}
+									className="mt-3 w-full text-center text-[10px] font-mono text-zinc-500 hover:text-zinc-300 underline underline-offset-2 decoration-zinc-700"
+								>
+									Show all accounts
+								</button>
 							)}
 						</div>
 					</div>

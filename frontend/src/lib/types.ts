@@ -12,4 +12,5 @@ export type Email = {
 
 export type Account = {
 	email: string;
+	name?: string;
 };

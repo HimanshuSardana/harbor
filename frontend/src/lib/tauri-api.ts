@@ -55,13 +55,15 @@ function toEmail(e: TauriEmail): Email {
 
 // ── Public API ──
 
-export async function fetchEmails(limit: number, offset: number): Promise<Email[]> {
+export async function fetchEmails(limit: number, offset: number, mailbox?: string): Promise<Email[]> {
 	if (isTauri()) {
 		const rows = await tauriInvoke<TauriEmail[]>("get_emails", { limit, offset });
 		return rows.map(toEmail).reverse(); // Ensure newest-first order
 	}
 	// Fallback: HTTP API
-	const res = await fetch(`${API_BASE}/api/emails?limit=${limit}&offset=${offset}`);
+	const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+	if (mailbox) params.set("mailbox", mailbox);
+	const res = await fetch(`${API_BASE}/api/emails?${params}`);
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
 	const data = await res.json();
 	// API returns oldest-first within batch; reverse for newest-at-top.
@@ -85,7 +87,11 @@ export async function fetchAccounts(): Promise<Account[]> {
 	}
 	const res = await fetch(`${API_BASE}/api/accounts`);
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
-	return res.json();
+	const data = await res.json();
+	return data.map((a: any) => ({
+		email: a.email,
+		name: a.name,
+	}));
 }
 
 export async function fetchEmlContent(filename: string): Promise<string> {
@@ -127,9 +133,11 @@ export async function markUnread(id: number): Promise<void> {
 /**
  * Trigger a forward sync on the backend.
  * Fetches new messages from the IMAP server since the last sync.
+ * If mailbox is provided, syncs only that account; otherwise syncs all.
  */
-export async function triggerSync(): Promise<void> {
-	const res = await fetch(`${API_BASE}/api/sync`, { method: "POST" });
+export async function triggerSync(mailbox?: string): Promise<void> {
+	const params = mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : "";
+	const res = await fetch(`${API_BASE}/api/sync${params}`, { method: "POST" });
 	if (!res.ok) throw new Error(`Sync API error: ${res.status}`);
 	await res.json();
 }
@@ -137,11 +145,12 @@ export async function triggerSync(): Promise<void> {
 /**
  * Trigger a backfill sync on the backend.
  * Fetches N older messages from the IMAP server before the oldest cached one.
- * Works in both Tauri and browser mode by hitting the HTTP API directly.
+ * If mailbox is provided, backfills only that account.
  */
-export async function triggerBackfill(count: number): Promise<void> {
-	const res = await fetch(`${API_BASE}/api/sync?backfill=${count}`, { method: "POST" });
+export async function triggerBackfill(count: number, mailbox?: string): Promise<void> {
+	const params = new URLSearchParams({ backfill: String(count) });
+	if (mailbox) params.set("mailbox", mailbox);
+	const res = await fetch(`${API_BASE}/api/sync?${params}`, { method: "POST" });
 	if (!res.ok) throw new Error(`Backfill API error: ${res.status}`);
-	// The response is 202 — sync is async, we don't wait for completion.
 	await res.json();
 }
