@@ -30,6 +30,7 @@ interface TauriEmail {
 	id: number;
 	mailbox: string;
 	filename: string | null;
+	flags: string | null;
 }
 
 interface TauriAccount {
@@ -48,6 +49,7 @@ function toEmail(e: TauriEmail): Email {
 		id: e.id,
 		mailbox: e.mailbox,
 		filename: e.filename ?? undefined,
+		flags: e.flags ?? undefined,
 	};
 }
 
@@ -72,6 +74,7 @@ export async function fetchEmails(limit: number, offset: number): Promise<Email[
 		id: e.id,
 		mailbox: e.mailbox,
 		filename: e.filename,
+		flags: e.flags,
 	}));
 }
 
@@ -99,6 +102,26 @@ export async function fetchTotalEmailCount(): Promise<number> {
 	}
 	// Fallback: not critical, just return 0 or a high number.
 	return 0;
+}
+
+/**
+ * Mark an email as seen (read).
+ * Works in both Tauri and browser mode via HTTP API.
+ */
+export async function markSeen(id: number): Promise<void> {
+	const res = await fetch(`${API_BASE}/api/emails/${id}/seen`, { method: "PATCH" });
+	if (!res.ok) throw new Error(`markSeen API error: ${res.status}`);
+	await res.json();
+}
+
+/**
+ * Mark an email as unread.
+ * Works in both Tauri and browser mode via HTTP API.
+ */
+export async function markUnread(id: number): Promise<void> {
+	const res = await fetch(`${API_BASE}/api/emails/${id}/unread`, { method: "PATCH" });
+	if (!res.ok) throw new Error(`markUnread API error: ${res.status}`);
+	await res.json();
 }
 
 /**

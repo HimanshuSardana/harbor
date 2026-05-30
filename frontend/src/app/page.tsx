@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
 import { Vim, vim } from "@replit/codemirror-vim";
-import { fetchEmails, fetchAccounts, triggerBackfill } from "@/lib/tauri-api";
+import { fetchEmails, fetchAccounts, triggerBackfill, markSeen, markUnread } from "@/lib/tauri-api";
 
 type Email = {
 	subject: string;
@@ -12,6 +12,7 @@ type Email = {
 	date: string;
 	body_text?: string;
 	body_html?: string;
+	flags?: string;
 	id?: number;
 	mailbox?: string;
 };
@@ -47,9 +48,14 @@ function extractDomain(from: string | undefined | null) {
 	return match ? match[1] : "";
 }
 
-function isUnread(subject: string) {
-	const flags = ["LMS", "Reminder", "Grand Challenge", "Hackathon"];
-	return flags.some((f) => subject.includes(f));
+function isUnread(email: Email) {
+	// Use real flags field: if flags contains "S" the email is Seen (read).
+	if (email.flags !== undefined) {
+		return !email.flags.includes("S");
+	}
+	// Fallback: keyword heuristics when flags aren't available
+	const keywords = ["LMS", "Reminder", "Grand Challenge", "Hackathon"];
+	return keywords.some((f) => email.subject.includes(f));
 }
 
 function cleanBodyHtml(raw: string): string {
@@ -700,6 +706,46 @@ export default function App() {
 					}
 					break;
 
+				case 's':
+					if (focusedPanel === 'list' && selectedIdx !== null && emails[selectedIdx]) {
+						e.preventDefault();
+						lastGKeyTimeRef.current = 0;
+						const email = emails[selectedIdx];
+						if (email.id !== undefined) {
+							markSeen(email.id).then(() => {
+								setEmails(prev => {
+									const updated = [...prev];
+									const idx = updated.findIndex(e => e.id === email.id);
+									if (idx !== -1) {
+										updated[idx] = { ...updated[idx], flags: "S" };
+									}
+									return updated;
+								});
+							}).catch(() => {});
+						}
+					}
+					break;
+
+				case 'u':
+					if (focusedPanel === 'list' && selectedIdx !== null && emails[selectedIdx]) {
+						e.preventDefault();
+						lastGKeyTimeRef.current = 0;
+						const email = emails[selectedIdx];
+						if (email.id !== undefined) {
+							markUnread(email.id).then(() => {
+								setEmails(prev => {
+									const updated = [...prev];
+									const idx = updated.findIndex(e => e.id === email.id);
+									if (idx !== -1) {
+										updated[idx] = { ...updated[idx], flags: "" };
+									}
+									return updated;
+								});
+							}).catch(() => {});
+						}
+					}
+					break;
+
 				case 'v':
 					if (focusedPanel === 'reader' && selectedIdx !== null && (emails[selectedIdx]?.body_html || emails[selectedIdx]?.body_text)) {
 						e.preventDefault();
@@ -856,7 +902,7 @@ export default function App() {
 							</div>
 							<div ref={listRef} className="flex-1 overflow-y-auto divide-y divide-zinc-900/60 select-none">
 								{emails.map((email, i) => {
-									const unread = isUnread(email.subject);
+									const unread = isUnread(email);
 									const active = selectedIdx === i;
 									const focus = focusedPanel === 'list';
 									return (
@@ -1241,7 +1287,7 @@ export default function App() {
 								)
 							) : (
 								searchEmails(emails, searchQuery).map((email, i) => {
-									const unread = isUnread(email.subject);
+									const unread = isUnread(email);
 									const active = selectedIdx === emails.indexOf(email);
 									const isSelected = i === searchResultIndex;
 									return (

@@ -2,12 +2,10 @@ export type Email = {
 	subject: string;
 	from_addr: string;
 	date: string;
-tbody?: never;
 	body_text?: string;
 	body_html?: string;
-tid?: never;
-filename?: string | undefined;
-tid2?: never;
+	flags?: string;
+	filename?: string | undefined;
 	id?: number | undefined;
 	mailbox?: string | undefined;
 };
