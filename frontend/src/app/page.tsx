@@ -21,8 +21,8 @@ export default function App() {
 		setSearchOpen, setSearchQuery, setSearchResultIndex,
 		currentAccount, activeMailbox, accountPickerOpen,
 		setAccountPickerOpen, switchAccount,
-		accountSearchQuery, accountSearchRef, accountSearchIdxRef,
-		setAccountSearchQuery,
+		accountSearchQuery, accountSearchRef, accountSearchIdx,
+		setAccountSearchIdx, setAccountSearchQuery,
 		fetchData, handleRefresh,
 		startDragging1, startDragging2,
 		selectedEmail, isDraggingAny, COMMANDS,
@@ -564,7 +564,7 @@ export default function App() {
 								value={accountSearchQuery}
 								onChange={e => {
 									setAccountSearchQuery(e.target.value);
-									accountSearchIdxRef.current = 0;
+									setAccountSearchIdx(0);
 								}}
 								onKeyDown={e => {
 									const filtered = accounts.filter(acc => {
@@ -576,9 +576,9 @@ export default function App() {
 									if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'p')) {
 										e.preventDefault();
 										if (e.key === 'n') {
-											accountSearchIdxRef.current = Math.min(accountSearchIdxRef.current + 1, filtered.length - 1);
+											setAccountSearchIdx(prev => Math.min(prev + 1, filtered.length - 1));
 										} else {
-											accountSearchIdxRef.current = Math.max(accountSearchIdxRef.current - 1, 0);
+											setAccountSearchIdx(prev => Math.max(prev - 1, 0));
 										}
 										return;
 									}
@@ -589,17 +589,17 @@ export default function App() {
 											break;
 										case 'ArrowDown':
 											e.preventDefault();
-											accountSearchIdxRef.current = Math.min(accountSearchIdxRef.current + 1, filtered.length - 1);
+											setAccountSearchIdx(prev => Math.min(prev + 1, filtered.length - 1));
 											break;
 										case 'ArrowUp':
 											e.preventDefault();
-											accountSearchIdxRef.current = Math.max(accountSearchIdxRef.current - 1, 0);
+											setAccountSearchIdx(prev => Math.max(prev - 1, 0));
 											break;
 										case 'Enter':
 											e.preventDefault();
-											if (filtered[accountSearchIdxRef.current]) {
-												const isActive = filtered[accountSearchIdxRef.current].email === (currentAccount || accounts[0].email);
-												switchAccount(isActive ? "" : filtered[accountSearchIdxRef.current].email);
+											if (filtered[accountSearchIdx]) {
+												const isActive = filtered[accountSearchIdx].email === (currentAccount || accounts[0].email);
+												switchAccount(isActive ? "" : filtered[accountSearchIdx].email);
 											}
 											break;
 									}
@@ -628,7 +628,7 @@ export default function App() {
 								}).map((acc, i) => {
 									const isActive = acc.email === (currentAccount || accounts[0].email);
 									const name = acc.email.split("@")[0];
-									const isSelected = i === accountSearchIdxRef.current;
+									const isSelected = i === accountSearchIdx;
 									const q = accountSearchQuery.toLowerCase();
 									const lowerName = (acc.name || name).toLowerCase();
 									const nameIdx = lowerName.indexOf(q);
@@ -638,7 +638,7 @@ export default function App() {
 											key={acc.email}
 											className={`w-full px-4 py-2.5 text-left text-xs transition flex items-center gap-3 ${isSelected ? "bg-zinc-800 text-white" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"}`}
 											onClick={() => switchAccount(isActive ? "" : acc.email)}
-											onMouseEnter={() => (accountSearchIdxRef.current = i)}
+											onMouseEnter={() => setAccountSearchIdx(i)}
 										>
 											<span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-zinc-800 text-[9px] font-bold text-zinc-400">
 												{name[0]?.toUpperCase()}

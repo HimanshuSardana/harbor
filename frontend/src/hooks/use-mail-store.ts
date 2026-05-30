@@ -81,7 +81,7 @@ export function useMailStore() {
 	// ── UI state: account search ──
 	const accountSearchRef = useRef<HTMLInputElement | null>(null);
 	const [accountSearchQuery, setAccountSearchQuery] = useState("");
-	const accountSearchIdxRef = useRef(0);
+	const [accountSearchIdx, setAccountSearchIdx] = useState(0);
 
 	// ── Search helpers ──
 	const resetSearchResultIndex = useCallback(() => setSearchResultIndex(0), []);
@@ -486,9 +486,9 @@ export function useMailStore() {
 					return name.includes(q) || acc.email.toLowerCase().includes(q);
 				});
 				if (e.key === 'n') {
-					accountSearchIdxRef.current = Math.min(accountSearchIdxRef.current + 1, filtered.length - 1);
+					setAccountSearchIdx(prev => Math.min(prev + 1, filtered.length - 1));
 				} else {
-					accountSearchIdxRef.current = Math.max(accountSearchIdxRef.current - 1, 0);
+					setAccountSearchIdx(prev => Math.max(prev - 1, 0));
 				}
 				return;
 			}
@@ -499,34 +499,35 @@ export function useMailStore() {
 					break;
 				case 'ArrowDown':
 					e.preventDefault();
-					{
+					setAccountSearchIdx(prev => {
 						const filtered = accounts.filter(acc => {
 							const q = accountSearchQuery.toLowerCase();
 							if (!q) return true;
 							const name = (acc.name || acc.email.split('@')[0]).toLowerCase();
 							return name.includes(q) || acc.email.toLowerCase().includes(q);
 						});
-						accountSearchIdxRef.current = Math.min(accountSearchIdxRef.current + 1, filtered.length - 1);
-					}
+						return Math.min(prev + 1, filtered.length - 1);
+					});
 					break;
 				case 'ArrowUp':
 					e.preventDefault();
-					accountSearchIdxRef.current = Math.max(accountSearchIdxRef.current - 1, 0);
+					setAccountSearchIdx(prev => Math.max(prev - 1, 0));
 					break;
 				case 'Enter':
 					e.preventDefault();
-					{
+					setAccountSearchIdx(prev => {
 						const filtered = accounts.filter(acc => {
 							const q = accountSearchQuery.toLowerCase();
 							if (!q) return true;
 							const name = (acc.name || acc.email.split('@')[0]).toLowerCase();
 							return name.includes(q) || acc.email.toLowerCase().includes(q);
 						});
-						if (filtered[accountSearchIdxRef.current]) {
-							const isActive = filtered[accountSearchIdxRef.current].email === (currentAccount || accounts[0].email);
-							switchAccount(isActive ? "" : filtered[accountSearchIdxRef.current].email);
+						if (filtered[prev]) {
+							const isActive = filtered[prev].email === (currentAccount || accounts[0].email);
+							switchAccount(isActive ? "" : filtered[prev].email);
 						}
-					}
+						return prev;
+					});
 					break;
 			}
 			return;
@@ -567,7 +568,7 @@ export function useMailStore() {
 			if (accounts.length > 1) {
 				setAccountPickerOpen(true);
 				setAccountSearchQuery("");
-				accountSearchIdxRef.current = 0;
+				setAccountSearchIdx(0);
 			}
 			return;
 		}
@@ -887,7 +888,8 @@ export function useMailStore() {
 		// Account search state
 		accountSearchQuery,
 		accountSearchRef,
-		accountSearchIdxRef,
+		accountSearchIdx,
+		setAccountSearchIdx,
 		setAccountSearchQuery,
 
 		// Account state
