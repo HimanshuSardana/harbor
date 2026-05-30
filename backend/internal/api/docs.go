@@ -77,6 +77,13 @@ func BuildDocsSpec() map[string]interface{} {
 							"schema": map[string]interface{}{"type": "string"},
 						},
 						{
+							"name":        "mailbox",
+							"in":          "query",
+							"description": "Account email to search within. Defaults to the first configured account.",
+							"required":    false,
+							"schema": map[string]interface{}{"type": "string", "format": "email"},
+						},
+						{
 							"name":        "limit",
 							"in":          "query",
 							"description": "Max results (default 20, max 100).",
@@ -108,10 +115,17 @@ func BuildDocsSpec() map[string]interface{} {
 			"/api/sync": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Trigger IMAP sync",
-					"description": "Triggers an immediate background sync. By default syncs new messages forward. Add ?backfill=N to fetch N older messages before the oldest cached one.",
+					"description": "Triggers an immediate background sync. By default syncs all accounts forward. Add ?backfill=N to fetch N older messages. Add ?mailbox=user@ex.com to sync only one account.",
 					"operationId": "syncNow",
 					"tags":        []string{"System"},
 					"parameters": []map[string]interface{}{
+						{
+							"name":        "mailbox",
+							"in":          "query",
+							"description": "Account email to sync (optional — syncs all accounts if omitted).",
+							"required":    false,
+							"schema": map[string]interface{}{"type": "string", "format": "email"},
+						},
 						{
 							"name":        "backfill",
 							"in":          "query",
@@ -219,10 +233,17 @@ func BuildDocsSpec() map[string]interface{} {
 			"/api/emails": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Fetch recent emails",
-					"description": "Fetches recent emails from the first configured IMAP account.",
+					"description": "Fetches recent emails from a configured IMAP account. Defaults to the first account if ?mailbox is omitted.",
 					"operationId": "getEmails",
 					"tags":        []string{"Emails"},
 					"parameters": []map[string]interface{}{
+						{
+							"name":        "mailbox",
+							"in":          "query",
+							"description": "Account email to fetch from (optional — defaults to first configured account).",
+							"required":    false,
+							"schema": map[string]interface{}{"type": "string", "format": "email"},
+						},
 						{
 							"name":        "limit",
 							"in":          "query",

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -52,28 +53,31 @@ func (h *Handler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, accounts)
 }
 
-// GetEmails returns cached emails with optional ?limit and ?offset.
-// Triggers a sync if the cache is empty or stale (first call).
+// GetEmails returns cached or live emails with optional ?limit, ?offset and ?mailbox.
+//
+//	GET /api/emails                      — first account, limit 10
+//	GET /api/emails?mailbox=user@ex.com  — specific account
+//	GET /api/emails?limit=50&offset=100  — pagination
 func (h *Handler) GetEmails(w http.ResponseWriter, r *http.Request) {
-	if len(h.cfg.Accounts) == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no accounts configured"})
+	acct, err := h.resolveAccount(r.URL.Query().Get("mailbox"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	mailbox := acct.Email
 
 	limit := parseIntParam(r, "limit", 10)
 	offset := parseIntParam(r, "offset", 0)
-	mailbox := h.cfg.Accounts[0].Email
 
-	// Sync on first request if empty.
+	// Store-backed path.
 	if h.Store != nil {
 		cnt, _ := h.Store.CountEmails(mailbox)
 		if cnt == 0 {
 			go func() {
-				if err := imap.Sync(h.cfg.Accounts[0], h.Store); err != nil {
+				if err := imap.Sync(acct, h.Store); err != nil {
 					log.Printf("[sync] %s: %v", mailbox, err)
 				}
 			}()
-			// Return empty 202 while syncing; caller can retry.
 			writeJSON(w, http.StatusAccepted, map[string]string{
 				"status":  "syncing",
 				"message": "first sync in progress, try again shortly",
@@ -90,13 +94,8 @@ func (h *Handler) GetEmails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback: no store configured, fetch directly from IMAP (legacy).
-	if len(h.cfg.Accounts) == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no accounts configured"})
-		return
-	}
-	account := h.cfg.Accounts[0]
-	emails, err := imap.FetchEmails(account, limit, offset)
+	// Legacy fallback: no store, fetch directly from IMAP.
+	emails, err := imap.FetchEmails(acct, limit, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -106,14 +105,11 @@ func (h *Handler) GetEmails(w http.ResponseWriter, r *http.Request) {
 
 // SearchEmails performs a full-text search over cached emails.
 //
-//	GET /api/search?q=hello+world&limit=10
+//	GET /api/search?q=hello+world&limit=10               — first account
+//	GET /api/search?q=meeting&mailbox=user@ex.com&limit=5 — specific account
 func (h *Handler) SearchEmails(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "search requires a store (no cache configured)"})
-		return
-	}
-	if len(h.cfg.Accounts) == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no accounts configured"})
 		return
 	}
 
@@ -123,10 +119,15 @@ func (h *Handler) SearchEmails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := parseIntParam(r, "limit", 20)
-	mailbox := h.cfg.Accounts[0].Email
+	acct, err := h.resolveAccount(r.URL.Query().Get("mailbox"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
 
-	emails, err := h.Store.SearchEmails(q, mailbox, limit)
+	limit := parseIntParam(r, "limit", 20)
+
+	emails, err := h.Store.SearchEmails(q, acct.Email, limit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -139,8 +140,9 @@ func (h *Handler) SearchEmails(w http.ResponseWriter, r *http.Request) {
 
 // SyncNow triggers an immediate IMAP sync in the background.
 //
-//	POST /api/sync             — forward sync (new messages only)
-//	POST /api/sync?backfill=50 — backfill older messages
+//	POST /api/sync                      — forward sync all accounts
+//	POST /api/sync?backfill=50          — backfill all accounts
+//	POST /api/sync?mailbox=user@ex.com  — sync a specific account only
 func (h *Handler) SyncNow(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no store configured"})
@@ -152,9 +154,20 @@ func (h *Handler) SyncNow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	backfill := parseIntParam(r, "backfill", 0)
+	accts := h.cfg.Accounts
+
+	// Filter to a single account if ?mailbox= is specified.
+	if m := r.URL.Query().Get("mailbox"); m != "" {
+		a, err := h.resolveAccount(m)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		accts = []config.Account{a}
+	}
 
 	go func() {
-		for _, acct := range h.cfg.Accounts {
+		for _, acct := range accts {
 			if backfill > 0 {
 				if err := imap.SyncOlder(acct, h.Store, backfill); err != nil {
 					log.Printf("[backfill] %s: %v", acct.Email, err)
@@ -233,6 +246,24 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
+}
+
+// resolveAccount looks up an account by email. If mailbox is empty, it
+// returns the first configured account. Returns an error if no accounts
+// exist or the given email doesn't match any account.
+func (h *Handler) resolveAccount(mailbox string) (config.Account, error) {
+	if len(h.cfg.Accounts) == 0 {
+		return config.Account{}, fmt.Errorf("no accounts configured")
+	}
+	if mailbox == "" {
+		return h.cfg.Accounts[0], nil
+	}
+	for _, a := range h.cfg.Accounts {
+		if a.Email == mailbox {
+			return a, nil
+		}
+	}
+	return config.Account{}, fmt.Errorf("unknown mailbox %q", mailbox)
 }
 
 // parseIntParam reads an integer query parameter.
