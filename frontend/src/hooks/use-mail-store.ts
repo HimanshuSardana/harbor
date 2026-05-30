@@ -78,6 +78,11 @@ export function useMailStore() {
 	const [searchResultIndex, setSearchResultIndex] = useState(0);
 	const searchRef = useRef<HTMLInputElement | null>(null);
 
+	// ── UI state: account search ──
+	const accountSearchRef = useRef<HTMLInputElement | null>(null);
+	const [accountSearchQuery, setAccountSearchQuery] = useState("");
+	const accountSearchIdxRef = useRef(0);
+
 	// ── Search helpers ──
 	const resetSearchResultIndex = useCallback(() => setSearchResultIndex(0), []);
 
@@ -453,6 +458,16 @@ export function useMailStore() {
 		}
 
 		if (searchOpen) {
+			if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'p')) {
+				e.preventDefault();
+				const results = searchEmails(emails, searchQuery);
+				if (e.key === 'n') {
+					setSearchResultIndex(prev => (prev < results.length - 1 ? prev + 1 : 0));
+				} else {
+					setSearchResultIndex(prev => (prev > 0 ? prev - 1 : results.length - 1));
+				}
+				return;
+			}
 			if (e.key === "Escape") {
 				e.preventDefault();
 				setSearchOpen(false);
@@ -460,11 +475,59 @@ export function useMailStore() {
 			return;
 		}
 
-		// Account picker — Escape to close
+		// Account picker — keyboard navigation
 		if (accountPickerOpen) {
-			if (e.key === "Escape") {
+			if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'p')) {
 				e.preventDefault();
-				setAccountPickerOpen(false);
+				const filtered = accounts.filter(acc => {
+					const q = accountSearchQuery.toLowerCase();
+					if (!q) return true;
+					const name = (acc.name || acc.email.split('@')[0]).toLowerCase();
+					return name.includes(q) || acc.email.toLowerCase().includes(q);
+				});
+				if (e.key === 'n') {
+					accountSearchIdxRef.current = Math.min(accountSearchIdxRef.current + 1, filtered.length - 1);
+				} else {
+					accountSearchIdxRef.current = Math.max(accountSearchIdxRef.current - 1, 0);
+				}
+				return;
+			}
+			switch (e.key) {
+				case 'Escape':
+					e.preventDefault();
+					setAccountPickerOpen(false);
+					break;
+				case 'ArrowDown':
+					e.preventDefault();
+					{
+						const filtered = accounts.filter(acc => {
+							const q = accountSearchQuery.toLowerCase();
+							if (!q) return true;
+							const name = (acc.name || acc.email.split('@')[0]).toLowerCase();
+							return name.includes(q) || acc.email.toLowerCase().includes(q);
+						});
+						accountSearchIdxRef.current = Math.min(accountSearchIdxRef.current + 1, filtered.length - 1);
+					}
+					break;
+				case 'ArrowUp':
+					e.preventDefault();
+					accountSearchIdxRef.current = Math.max(accountSearchIdxRef.current - 1, 0);
+					break;
+				case 'Enter':
+					e.preventDefault();
+					{
+						const filtered = accounts.filter(acc => {
+							const q = accountSearchQuery.toLowerCase();
+							if (!q) return true;
+							const name = (acc.name || acc.email.split('@')[0]).toLowerCase();
+							return name.includes(q) || acc.email.toLowerCase().includes(q);
+						});
+						if (filtered[accountSearchIdxRef.current]) {
+							const isActive = filtered[accountSearchIdxRef.current].email === (currentAccount || accounts[0].email);
+							switchAccount(isActive ? "" : filtered[accountSearchIdxRef.current].email);
+						}
+					}
+					break;
 			}
 			return;
 		}
@@ -503,6 +566,8 @@ export function useMailStore() {
 			e.preventDefault();
 			if (accounts.length > 1) {
 				setAccountPickerOpen(true);
+				setAccountSearchQuery("");
+				accountSearchIdxRef.current = 0;
 			}
 			return;
 		}
@@ -818,6 +883,12 @@ export function useMailStore() {
 		setSearchQuery,
 		setSearchResultIndex,
 		resetSearchResultIndex,
+
+		// Account search state
+		accountSearchQuery,
+		accountSearchRef,
+		accountSearchIdxRef,
+		setAccountSearchQuery,
 
 		// Account state
 		currentAccount,

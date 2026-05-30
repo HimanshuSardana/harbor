@@ -21,6 +21,8 @@ export default function App() {
 		setSearchOpen, setSearchQuery, setSearchResultIndex,
 		currentAccount, activeMailbox, accountPickerOpen,
 		setAccountPickerOpen, switchAccount,
+		accountSearchQuery, accountSearchRef, accountSearchIdxRef,
+		setAccountSearchQuery,
 		fetchData, handleRefresh,
 		startDragging1, startDragging2,
 		selectedEmail, isDraggingAny, COMMANDS,
@@ -454,6 +456,15 @@ export default function App() {
 								onChange={e => setSearchQuery(e.target.value)}
 								onKeyDown={e => {
 									const results = searchEmails(emails, searchQuery);
+									if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'p')) {
+										e.preventDefault();
+										if (e.key === 'n') {
+											setSearchResultIndex(prev => (prev < results.length - 1 ? prev + 1 : 0));
+										} else {
+											setSearchResultIndex(prev => (prev > 0 ? prev - 1 : results.length - 1));
+										}
+										return;
+									}
 									switch (e.key) {
 										case 'Escape':
 											e.preventDefault();
@@ -532,59 +543,154 @@ export default function App() {
 				</div>
 			)}
 
-			{/* ── Account Picker ── */}
+			{/* ── Account Picker (search popup) ── */}
 			{accountPickerOpen && (
 				<div
-					className="fixed inset-0 z-50 flex items-center justify-center"
+					className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
 					onClick={() => setAccountPickerOpen(false)}
 				>
 					<div className="absolute inset-0 bg-black/60" />
 					<div
-						className="relative w-full max-w-sm rounded-lg border border-zinc-800 bg-zinc-950 p-4 shadow-2xl shadow-black/60"
+						className="relative w-full max-w-2xl rounded-lg border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/60 overflow-hidden"
 						onClick={e => e.stopPropagation()}
 					>
-						<div className="flex items-center justify-between mb-4">
-							<h2 className="text-sm font-bold text-white tracking-tight">Select Account</h2>
-							<button onClick={() => setAccountPickerOpen(false)} className="text-zinc-500 hover:text-zinc-300 transition">
-								<svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-									<path d="M6 18L18 6M6 6l12 12" />
-								</svg>
-							</button>
+						<div className="flex items-center border-b border-zinc-800 px-4">
+							<svg className="h-4 w-4 shrink-0 text-zinc-500" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+								<path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+							</svg>
+							<input
+								ref={accountSearchRef}
+								type="text"
+								value={accountSearchQuery}
+								onChange={e => {
+									setAccountSearchQuery(e.target.value);
+									accountSearchIdxRef.current = 0;
+								}}
+								onKeyDown={e => {
+									const filtered = accounts.filter(acc => {
+										const q = accountSearchQuery.toLowerCase();
+										if (!q) return true;
+										const name = (acc.name || acc.email.split('@')[0]).toLowerCase();
+										return name.includes(q) || acc.email.toLowerCase().includes(q);
+									});
+									if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'p')) {
+										e.preventDefault();
+										if (e.key === 'n') {
+											accountSearchIdxRef.current = Math.min(accountSearchIdxRef.current + 1, filtered.length - 1);
+										} else {
+											accountSearchIdxRef.current = Math.max(accountSearchIdxRef.current - 1, 0);
+										}
+										return;
+									}
+									switch (e.key) {
+										case 'Escape':
+											e.preventDefault();
+											setAccountPickerOpen(false);
+											break;
+										case 'ArrowDown':
+											e.preventDefault();
+											accountSearchIdxRef.current = Math.min(accountSearchIdxRef.current + 1, filtered.length - 1);
+											break;
+										case 'ArrowUp':
+											e.preventDefault();
+											accountSearchIdxRef.current = Math.max(accountSearchIdxRef.current - 1, 0);
+											break;
+										case 'Enter':
+											e.preventDefault();
+											if (filtered[accountSearchIdxRef.current]) {
+												const isActive = filtered[accountSearchIdxRef.current].email === (currentAccount || accounts[0].email);
+												switchAccount(isActive ? "" : filtered[accountSearchIdxRef.current].email);
+											}
+											break;
+									}
+								}}
+								placeholder="Search accounts by name or email..."
+								className="w-full bg-transparent px-3 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none"
+								autoFocus
+							/>
 						</div>
-						<div className="space-y-1">
-							{accounts.map((acc) => {
-								const isActive = acc.email === (currentAccount || accounts[0].email);
-								const name = acc.email.split("@")[0];
-								return (
-									<button
-										key={acc.email}
-										onClick={() => switchAccount(isActive ? "" : acc.email)}
-										className={`w-full flex items-center gap-3 rounded-lg px-4 py-3 text-left text-xs transition ${isActive ? "bg-zinc-800 ring-1 ring-inset ring-zinc-600" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"}`}
-									>
-										<span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-700 text-[9px] font-bold text-zinc-300">
-											{name[0]?.toUpperCase()}
-										</span>
-										<div className="min-w-0 flex-1">
-											<p className={`truncate ${isActive ? "font-semibold text-white" : ""}`}>{acc.name || name}</p>
-											<p className="truncate text-[10px] text-zinc-500 font-mono">{acc.email}</p>
-										</div>
-										{isActive && (
-											<svg className="h-4 w-4 shrink-0 text-blue-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-												<path d="M5 13l4 4L19 7" />
-											</svg>
-										)}
-									</button>
-								);
-							})}
-							{currentAccount && (
+						<div className="max-h-96 overflow-y-auto py-2">
+							{accounts.filter(acc => {
+								const q = accountSearchQuery.toLowerCase();
+								if (!q) return true;
+								const name = (acc.name || acc.email.split('@')[0]).toLowerCase();
+								return name.includes(q) || acc.email.toLowerCase().includes(q);
+							}).length === 0 ? (
+								<div className="px-4 py-8 text-center text-xs text-zinc-600 font-mono">
+									No accounts found
+								</div>
+							) : (
+								accounts.filter(acc => {
+									const q = accountSearchQuery.toLowerCase();
+									if (!q) return true;
+									const name = (acc.name || acc.email.split('@')[0]).toLowerCase();
+									return name.includes(q) || acc.email.toLowerCase().includes(q);
+								}).map((acc, i) => {
+									const isActive = acc.email === (currentAccount || accounts[0].email);
+									const name = acc.email.split("@")[0];
+									const isSelected = i === accountSearchIdxRef.current;
+									const q = accountSearchQuery.toLowerCase();
+									const lowerName = (acc.name || name).toLowerCase();
+									const nameIdx = lowerName.indexOf(q);
+									const emailIdx = acc.email.toLowerCase().indexOf(q);
+									return (
+										<button
+											key={acc.email}
+											className={`w-full px-4 py-2.5 text-left text-xs transition flex items-center gap-3 ${isSelected ? "bg-zinc-800 text-white" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"}`}
+											onClick={() => switchAccount(isActive ? "" : acc.email)}
+											onMouseEnter={() => (accountSearchIdxRef.current = i)}
+										>
+											<span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-zinc-800 text-[9px] font-bold text-zinc-400">
+												{name[0]?.toUpperCase()}
+											</span>
+											<div className="flex-1 min-w-0">
+												<p className={`truncate ${isActive ? "font-semibold text-white" : ""}`}>
+													{accountSearchQuery && nameIdx >= 0 ? (
+														<>
+															{(acc.name || name).slice(0, nameIdx)}
+															<span className="bg-yellow-500/20 text-yellow-400 font-medium">
+																{(acc.name || name).slice(nameIdx, nameIdx + accountSearchQuery.length)}
+															</span>
+															{(acc.name || name).slice(nameIdx + accountSearchQuery.length)}
+														</>
+													) : (
+														acc.name || name
+													)}
+												</p>
+												<p className="truncate text-[10px] text-zinc-500 font-mono">
+													{accountSearchQuery && emailIdx >= 0 ? (
+														<>
+															{acc.email.slice(0, emailIdx)}
+															<span className="bg-yellow-500/20 text-yellow-400 font-medium">
+																{acc.email.slice(emailIdx, emailIdx + accountSearchQuery.length)}
+															</span>
+															{acc.email.slice(emailIdx + accountSearchQuery.length)}
+														</>
+													) : (
+														acc.email
+													)}
+												</p>
+											</div>
+											{isActive && (
+												<svg className="h-4 w-4 shrink-0 text-blue-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+													<path d="M5 13l4 4L19 7" />
+												</svg>
+											)}
+										</button>
+									);
+								})
+							)}
+						</div>
+						{currentAccount && (
+							<div className="border-t border-zinc-800 px-4 py-2">
 								<button
 									onClick={() => switchAccount("")}
-									className="mt-3 w-full text-center text-[10px] font-mono text-zinc-500 hover:text-zinc-300 underline underline-offset-2 decoration-zinc-700"
+									className="w-full text-center text-[10px] font-mono text-zinc-500 hover:text-zinc-300 underline underline-offset-2 decoration-zinc-700"
 								>
 									Show all accounts
 								</button>
-							)}
-						</div>
+							</div>
+						)}
 					</div>
 				</div>
 			)}
