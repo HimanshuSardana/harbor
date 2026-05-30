@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full scroll-smooth">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Harbor — Vim-Driven Desktop Email Client</title>
+  
+  <!-- Google Fonts for jet-fast loading fallback monospace fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg:          #ffffff;
+      --surface:     #fafafa;
+      --border:      #eaeaea;
+      --border-hover:#d2d2d2;
+      --text:        #111111;
+      --secondary:   #555555;
+      --muted:       #999999;
+      --accent:      #2563eb; /* Steel Blue */
+      --accent-glow: rgba(37, 99, 235, 0.08);
+      --font:        'Iosevka', 'Iosevka Term', 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+      --mono:        'Iosevka', 'Iosevka Term', 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:          #0a0a0a;
+        --surface:     #141414;
+        --border:      #1f1f1f;
+        --border-hover:#2d2d2d;
+        --text:        #ededed;
+        --secondary:   #a0a0a0;
+        --muted:       #666666;
+        --accent:      #60a5fa;
+        --accent-glow: rgba(96, 165, 250, 0.15);
+      }
+    }
+    
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: -0.015em;
+      scroll-behavior: smooth;
+    }
+
+    /* Selection Highlighting */
+    ::selection {
+      background: var(--accent-glow);
+      color: var(--accent);
+    }
+
+    /* Custom thin scrollbar */
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: var(--surface);
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 2px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: var(--accent);
+    }
+
+    /* ── Navigation ── */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      height: 52px;
+      display: flex;
+      align-items: center;
+    }
+    @media (prefers-color-scheme: dark) {
+      nav { background: rgba(10, 10, 10, 0.85); }
+    }
+    .nav-inner {
+      width: 100%;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 0 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+      color: var(--text);
+      font-weight: 500;
+      font-size: 14px;
+    }
+    .logo span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 400;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .nav-link {
+      text-decoration: none;
+      color: var(--secondary);
+      font-size: 12px;
+      transition: color 0.12s;
+    }
+    .nav-link:hover {
+      color: var(--text);
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 16px;
+      background: var(--text);
+      color: var(--bg);
+      border-radius: 4px;
+      font-size: 11.5px;
+      font-weight: 500;
+      text-decoration: none;
+      transition: opacity 0.12s, transform 0.1s;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .btn:hover {
+      opacity: 0.9;
+    }
+    .btn:active {
+      transform: scale(0.97);
+    }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-outline:hover {
+      background: var(--surface);
+      border-color: var(--border-hover);
+      opacity: 1;
+    }
+
+    /* ── Layout Container ── */
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Hero Section ── */
+    .hero-section {
+      padding: 160px 0 90px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    h1 {
+      font-size: 34px;
+      font-weight: 500;
+      line-height: 1.25;
+      margin-bottom: 18px;
+      color: var(--text);
+      max-width: 580px;
+    }
+    .subtitle {
+      font-size: 13.5px;
+      color: var(--secondary);
+      margin-bottom: 32px;
+      line-height: 1.6;
+      max-width: 520px;
+    }
+    .hero-ctas {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    /* ── Features Section ── */
+    .features {
+      padding: 80px 0;
+      border-top: 1px solid var(--border);
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text);
+      margin-bottom: 24px;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+    }
+    .feature-card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .feature-card h3 {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+    }
+    .feature-card p {
+      font-size: 11.5px;
+      color: var(--secondary);
+      line-height: 1.6;
+    }
+
+    /* ── Tech Stack / Architecture ── */
+    .architecture {
+      padding: 80px 0;
+      border-top: 1px solid var(--border);
+    }
+    .arch-container {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 40px;
+      align-items: start;
+    }
+    .arch-tab-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .arch-tab-btn {
+      width: 100%;
+      text-align: left;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--secondary);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .arch-tab-btn:hover {
+      border-color: var(--border-hover);
+      color: var(--text);
+    }
+    .arch-tab-btn.active {
+      background: var(--surface);
+      border-color: var(--border-hover);
+      color: var(--text);
+      font-weight: 500;
+    }
+    .arch-code-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--secondary);
+      overflow-x: auto;
+      max-height: 280px;
+    }
+    .arch-code-block pre {
+      line-height: 1.5;
+    }
+    .code-comment { color: var(--muted); }
+    .code-kw { color: var(--accent); font-weight: 500; }
+    .code-str { color: #10b981; }
+
+    /* ── Cheatsheet ── */
+    .cheatsheet {
+      padding: 80px 0;
+      border-top: 1px solid var(--border);
+    }
+    .cheatsheet-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+    }
+    .cheat-col h4 {
+      font-size: 12px;
+      font-weight: 500;
+      margin-bottom: 16px;
+      color: var(--text);
+    }
+    .cheat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 11.5px;
+      color: var(--secondary);
+    }
+    .cheat-row span {
+      font-family: var(--mono);
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    /* ── Installation ── */
+    .installation {
+      padding: 80px 0 120px;
+      border-top: 1px solid var(--border);
+    }
+    .terminal-window {
+      max-width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 18px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--secondary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+      transition: border-color 0.12s, background-color 0.12s;
+    }
+    .terminal-window:hover {
+      border-color: var(--border-hover);
+      background: var(--bg);
+    }
+    .terminal-window code {
+      color: var(--text);
+      word-break: break-all;
+      padding-right: 12px;
+    }
+    .terminal-window code::before {
+      content: '$ ';
+      color: var(--muted);
+    }
+    #copy-text {
+      font-size: 10.5px;
+      color: var(--muted);
+      transition: color 0.12s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .terminal-window:hover #copy-text {
+      color: var(--text);
+    }
+
+    /* ── Footer ── */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .features-grid, .cheatsheet-grid {
+        grid-template-columns: 1fr;
+        gap: 32px;
+      }
+      .arch-container {
+        grid-template-columns: 1fr;
+        gap: 24px;
+      }
+      footer {
+        flex-direction: column;
+        gap: 12px;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav>
+    <div class="nav-inner">
+      <a href="#" class="logo">
+        Harbor <span>mail client</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features" class="nav-link">Features</a>
+        <a href="https://github.com/HimanshuSardana/harbor" class="btn btn-outline" target="_blank">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <!-- Hero Section -->
+    <section class="hero-section">
+      <h1>Vim keybindings for your inbox. Fully local-first.</h1>
+      <p class="subtitle">Harbor is an ultra-minimal desktop email client built with Tauri v2 and Go. Enjoy rapid-fire searching with SQLite FTS5, instant keyboard navigation, and full offline-first IMAP synchronization.</p>
+      <div class="hero-ctas">
+        <button onclick="copyCloneUrl(this)" class="btn font-mono" id="cta-get-started">Get Started</button>
+        <a href="https://github.com/HimanshuSardana/harbor" class="btn btn-outline" target="_blank">View GitHub</a>
+      </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features" id="features">
+      <!-- <div class="section-title">Core Features</div> -->
+      <div class="features-grid">
+        <div class="feature-card">
+          <h3>Native CodeMirror Vim</h3>
+          <p>Powered by CodeMirror 6 and @replit/codemirror-vim. Navigate structures, perform visual selection deletes, macros, and register buffers natively inside your composer.</p>
+        </div>
+        <div class="feature-card">
+          <h3>SQLite FTS5 Indexing</h3>
+          <p>Stores emails locally as native Maildir .eml structures. Re-indexes and tokens your inbox locally, delivering full-text matches across large corpora under 10ms.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Go Concurrent Sync</h3>
+          <p>Lightweight background client thread handles IMAP connection pipelines securely, caching mail data in an offline-first state machine.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Installation Section -->
+    <section class="installation" id="install">
+      <div class="section-title">Get Started</div>
+      <p class="subtitle" style="margin-bottom: 24px;">Clone the repository to configure and spin up the native daemon locally on your system.</p>
+      <div class="terminal-window" onclick="copyCloneUrl(this)">
+        <code>git clone git@github.com:HimanshuSardana/harbor.git</code>
+        <span id="copy-text">Click to copy URL</span>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <span>Harbor Mail Project. Released under MIT.</span>
+      <span>Self-Hostable • Minimalistic Layout • Iosevka Type</span>
+    </footer>
+  </div>
+
+  <script>
+    // Copy handler for cloning origin URL
+    function copyCloneUrl(el) {
+      const cloneText = "git@github.com:HimanshuSardana/harbor.git";
+      const textarea = document.createElement('textarea');
+      textarea.value = cloneText;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        
+        // Handle visual state feedback on the clicked button
+        const copyLabel = document.getElementById('copy-text');
+        const ctaBtn = document.getElementById('cta-get-started');
+        
+        if (el && el.id === 'cta-get-started') {
+          ctaBtn.textContent = "Copied SSH URL!";
+          setTimeout(() => {
+            ctaBtn.textContent = "Get Started";
+          }, 2000);
+        } else if (copyLabel) {
+          copyLabel.textContent = "Copied URL!";
+          setTimeout(() => {
+            copyLabel.textContent = "Click to copy URL";
+          }, 2000);
+        }
+      } catch (err) {
+        console.warn('Fallback copy failure', err);
+      }
+      document.body.removeChild(textarea);
+    }
+
+    // Technology Architecture Selector
+    function selectArch(tab) {
+      const tabs = ['tauri', 'go', 'sqlite'];
+      tabs.forEach(t => {
+        const btn = document.getElementById(`tab-btn-${t}`);
+        const code = document.getElementById(`code-${t}`);
+        if (t === tab) {
+          btn.classList.add('active');
+          code.style.display = 'block';
+        } else {
+          btn.classList.remove('active');
+          code.style.display = 'none';
+        }
+      });
+    }
+  </script>
+</body>
+</html>

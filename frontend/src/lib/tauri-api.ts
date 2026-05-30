@@ -125,6 +125,16 @@ export async function markUnread(id: number): Promise<void> {
 }
 
 /**
+ * Trigger a forward sync on the backend.
+ * Fetches new messages from the IMAP server since the last sync.
+ */
+export async function triggerSync(): Promise<void> {
+	const res = await fetch(`${API_BASE}/api/sync`, { method: "POST" });
+	if (!res.ok) throw new Error(`Sync API error: ${res.status}`);
+	await res.json();
+}
+
+/**
  * Trigger a backfill sync on the backend.
  * Fetches N older messages from the IMAP server before the oldest cached one.
  * Works in both Tauri and browser mode by hitting the HTTP API directly.

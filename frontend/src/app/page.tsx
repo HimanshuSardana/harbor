@@ -1,817 +1,28 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { EditorView, keymap, drawSelection, lineNumbers } from "@codemirror/view";
-import { Compartment, EditorState } from "@codemirror/state";
-import { Vim, vim } from "@replit/codemirror-vim";
-import { fetchEmails, fetchAccounts, triggerBackfill, markSeen, markUnread } from "@/lib/tauri-api";
-
-type Email = {
-	subject: string;
-	from_addr: string;
-	date: string;
-	body_text?: string;
-	body_html?: string;
-	flags?: string;
-	id?: number;
-	mailbox?: string;
-};
-
-type Account = {
-	email: string;
-};
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function formatDate(raw: string) {
-	const d = new Date(raw);
-	const now = new Date();
-	const diff = now.getTime() - d.getTime();
-	const hours = Math.floor(diff / 3_600_000);
-
-	if (hours < 1) return `${Math.floor(diff / 60_000)}m ago`;
-	if (hours < 24) return `${hours}h ago`;
-	if (hours < 48) return "Yesterday";
-	return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-}
-
-function extractName(from: string | undefined | null) {
-	if (!from) return "?";
-	const match = from.match(/^"?(.+?)"?\s*</);
-	if (match) return match[1].trim();
-	return from.split("@")[0];
-}
-
-function extractDomain(from: string | undefined | null) {
-	if (!from) return "";
-	const match = from.match(/@([^>]+)>?/);
-	return match ? match[1] : "";
-}
-
-function isUnread(email: Email) {
-	// Use real flags field: if flags contains "S" the email is Seen (read).
-	if (email.flags !== undefined) {
-		return !email.flags.includes("S");
-	}
-	// Fallback: keyword heuristics when flags aren't available
-	const keywords = ["LMS", "Reminder", "Grand Challenge", "Hackathon"];
-	return keywords.some((f) => email.subject.includes(f));
-}
-
-function cleanBodyHtml(raw: string): string {
-	return raw
-		.replace(/^[\s\S]*?(<html[^>]*>)/i, "$1")
-		.replace(/(=3D)/g, "=")
-		.replace(/=\r?\n\s*/g, "")
-		.replace(/&amp;/g, "&");
-}
-
-function buildIframeDoc(email: Email): string {
-	const rawBody = email.body_html || email.body_text || "<p><em>No body content</em></p>";
-	const cleaned = cleanBodyHtml(rawBody);
-
-	if (/<html[\s>]/i.test(cleaned)) {
-		return cleaned
-			.replace(/(<body[^>]*)(>)/i, '$1 tabindex="-1"$2')
-			.replace(/(<body[^>]*style=)"([^"]*)"/i, (_, pre, styles) => `${pre}"${styles}; caret-color: #3b82f6;"`)
-			.replace(/(<\/style>)/i, `* { caret-color: #3b82f6; }\n$1`);
-	}
-
-	return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="color-scheme" content="dark only" />
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      padding: 24px;
-      font-family: "Iosevka", "Cascadia Code", "Fira Code", "SF Mono", Menlo, Monaco, monospace;
-      font-size: 14px;
-      line-height: 1.6;
-      color: #e4e4e7;
-      background: #000000;
-      caret-color: #3b82f6;
-    }
-    a { color: #3b82f6; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    img { max-width: 100%; height: auto; }
-    table { max-width: 100%; border-collapse: collapse; }
-    p { margin-bottom: 12px; }
-    * { user-select: none; -webkit-user-select: none; }
-    body { user-select: text; -webkit-user-select: text; }
-    ::selection { background: #3b82f6; color: #fff; }
-  </style>
-</head>
-<body tabindex="-1">${cleaned}</body>
-</html>`;
-}
-
-function stripHtml(html: string): string {
-	return html
-		.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-		.replace(/<[^>]+>/g, "")
-		.replace(/&amp;/g, "&")
-		.replace(/&nbsp;/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-}
-
-function bodyPreview(email: Email, maxLen = 80): string {
-	const html = email.body_html || email.body_text || "";
-	const text = stripHtml(html);
-	if (text.length <= maxLen) return text;
-	return text.slice(0, maxLen).replace(/\s+\S*$/, "") + "…";
-}
-
-function searchEmails(emails: Email[], query: string) {
-	if (!query || !query.trim()) return emails;
-	const searchQuery = query.toLowerCase();
-	return emails.filter(email => {
-		return (
-			email.subject.toLowerCase().includes(searchQuery) ||
-			email.from_addr.toLowerCase().includes(searchQuery) ||
-			(email.body_html && email.body_html.toLowerCase().includes(searchQuery)) ||
-			(email.body_text && email.body_text.toLowerCase().includes(searchQuery))
-		);
-	});
-}
-
-function highlightText(text: string, query: string): React.ReactNode {
-	if (!query) return text;
-	const regex = new RegExp(`(${escapeRegExp(query)})`, 'gi');
-	const parts = text.split(regex);
-	return parts.map((part, i) =>
-		regex.test(part) ?
-			<span key={i} className="bg-yellow-500/20 text-yellow-400 font-medium">{part}</span> :
-			part
-	);
-}
-
-function escapeRegExp(string: string): string {
-	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-
+import { useMailStore } from "@/hooks/use-mail-store";
+import { formatDate, extractName, isUnread, bodyPreview, buildIframeDoc, searchEmails, highlightSegments } from "@/lib/email-helpers";
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function App() {
-	const PAGE_SIZE = 50;
-
-	const [emails, setEmails] = useState<Email[]>([]);
-	const [accounts, setAccounts] = useState<Account[]>([]);
-	const [loading, setLoading] = useState(true);
-	const [loadingMore, setLoadingMore] = useState(false);
-	const [backfilling, setBackfilling] = useState(false);
-	const [backfillExhausted, setBackfillExhausted] = useState(false);
-	const [hasMore, setHasMore] = useState(true);
-	const [error, setError] = useState<string | null>(null);
-	const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
-	const [refreshing, setRefreshing] = useState(false);
-	const [focusedPanel, setFocusedPanel] = useState<'list' | 'reader'>('list');
-	const [visualMode, setVisualMode] = useState(false);
-	const [plainText, setPlainText] = useState("");
-
-	const listRef = useRef<HTMLDivElement | null>(null);
-	const cmContainerRef = useRef<HTMLDivElement | null>(null);
-	const cmViewRef = useRef<EditorView | null>(null);
-	const wrapCompRef = useRef(new Compartment());
-	const numCompRef = useRef(new Compartment());
-	const exDefined = useRef(false);
-	const offsetRef = useRef(0);
-	const backfillingRef = useRef(false);
-	const backfillRetryRef = useRef(0);
-	const backfillExhaustedRef = useRef(false);
-	const lastGKeyTimeRef = useRef(0);
-
-	// Resizing States
-	const [col1Width, setCol1Width] = useState(240);
-	const [sidebarOpen, setSidebarOpen] = useState(true);
-	const [col2Width, setCol2Width] = useState(360);
-	const [isDragging1, setIsDragging1] = useState(false);
-	const [isDragging2, setIsDragging2] = useState(false);
-	const [isMobile, setIsMobile] = useState(false);
-	// ── Command Palette ──
-	const [paletteOpen, setPaletteOpen] = useState(false);
-	const [paletteQuery, setPaletteQuery] = useState("");
-	const paletteRef = useRef<HTMLInputElement | null>(null);
-	const paletteIdxRef = useRef(0);
-	const [settingsOpen, setSettingsOpen] = useState(false);
-	const [theme, setTheme] = useState<'default' | 'catppuccin'>('default');
-	const [searchOpen, setSearchOpen] = useState(false);
-	const [searchQuery, setSearchQuery] = useState("");
-	const [searchResultIndex, setSearchResultIndex] = useState(0);
-	const searchRef = useRef<HTMLInputElement | null>(null);
-
-	const iframeRef = useRef<HTMLIFrameElement | null>(null);
-
-	// Reset search result index when query changes
-	useEffect(() => {
-		setSearchResultIndex(0);
-	}, [searchQuery]);
-
-	// Scroll to selected search result
-	useEffect(() => {
-		if (searchOpen && searchResultIndex > 0) {
-			setTimeout(() => {
-				const selectedElement = document.querySelector(`[data-search-index="${searchResultIndex}"]`);
-				if (selectedElement) {
-					selectedElement.scrollIntoView({ block: 'nearest' });
-				}
-			}, 100);
-		}
-	}, [searchOpen, searchResultIndex]);
-	useEffect(() => {
-		const handleResize = () => setIsMobile(window.innerWidth < 768);
-		handleResize();
-		window.addEventListener("resize", handleResize);
-		return () => window.removeEventListener("resize", handleResize);
-	}, []);
-
-	// ── Initial fetch ──
-	const fetchData = useCallback(async (silent = false) => {
-		if (!silent) setLoading(true);
-		setError(null);
-		offsetRef.current = 0;
-		// Always fetch accounts alongside the first emails request.
-		try {
-			const [emailsData, accountsData] = await Promise.all([
-				fetchEmails(PAGE_SIZE, 0),
-				fetchAccounts(),
-			]);
-			// Tauri API / SQLite returns newest-first already, no .reverse() needed.
-			// HTTP fallback reverses internally.
-			setEmails(emailsData);
-			setAccounts(accountsData);
-			// If running in Tauri, check total count to determine hasMore
-			const total = typeof window !== "undefined" && "__TAURI__" in window
-				? await (await import("@/lib/tauri-api")).fetchTotalEmailCount()
-				: 0;
-			if (total > 0) {
-				// Tauri mode — we know the exact count
-				setHasMore(emailsData.length < total);
-				offsetRef.current = emailsData.length;
-			} else {
-				// HTTP mode — no total count known.
-				// Assume more may exist on the IMAP server until a backfill
-				// attempt proves otherwise. This lets infinite scroll + backfill work.
-				setHasMore(emailsData.length > 0);
-				offsetRef.current = emailsData.length;
-			}
-		} catch (e: unknown) {
-			const msg = e instanceof Error ? e.message : "Unknown error";
-			setError(msg);
-		} finally {
-			setLoading(false);
-			setRefreshing(false);
-		}
-	}, []);
-
-	useEffect(() => { fetchData(); }, [fetchData]);
-
-	// Reset backfill-exhausted when we have data (initial load or refresh)
-	useEffect(() => {
-		if (emails.length > 0) {
-			setBackfillExhausted(false);
-			backfillExhaustedRef.current = false;
-		}
-	}, [emails.length]);
-
-	// ── Load more (infinite scroll) with backfill support ──
-	const loadMoreEmails = useCallback(async () => {
-		if (!hasMore || loadingMore || backfillingRef.current) return;
-		setLoadingMore(true);
-		try {
-			const offset = offsetRef.current;
-			const data = await fetchEmails(PAGE_SIZE, offset);
-
-			if (data.length > 0) {
-				// Got more cached emails — append and continue
-				setEmails(prev => [...prev, ...data]);
-				offsetRef.current = offset + data.length;
-				backfillRetryRef.current = 0;
-				// Check total to determine if there's more
-				const total = typeof window !== "undefined" && "__TAURI__" in window
-					? await (await import("@/lib/tauri-api")).fetchTotalEmailCount()
-					: 0;
-				if (total > 0) {
-					// Tauri mode — exact count known
-					setHasMore(offset + data.length < total);
-				} else {
-					// HTTP mode — keep hasMore alive so we can backfill
-					// when the cache eventually runs dry
-					setHasMore(true);
-				}
-			} else {
-				// No more cached emails → trigger a backfill sync
-				setLoadingMore(false);
-				backfillingRef.current = true;
-				setBackfilling(true);
-				try {
-					await triggerBackfill(20);
-					// Backend sync is async; poll for new data with backoff
-					let newData: Email[] = [];
-					const maxRetries = 6;
-					for (let attempt = 0; attempt < maxRetries; attempt++) {
-						await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-						newData = await fetchEmails(PAGE_SIZE, offset);
-						if (newData.length > 0) break;
-					}
-					if (newData.length > 0) {
-						setEmails(prev => [...prev, ...newData]);
-						offsetRef.current = offset + newData.length;
-						backfillRetryRef.current = 0;
-						setHasMore(newData.length >= PAGE_SIZE);
-					} else {
-						// Backfill returned nothing — IMAP has no more older messages
-						setHasMore(false);
-						setBackfillExhausted(true);
-						backfillExhaustedRef.current = true;
-					}
-				} catch {
-					// backfill failed silently
-				} finally {
-					backfillingRef.current = false;
-					setBackfilling(false);
-					setLoadingMore(false);
-				}
-				return;
-			}
-		} catch {
-			// silently swallow load-more errors
-		} finally {
-			setLoadingMore(false);
-		}
-	}, [hasMore, loadingMore]);
-
-	// ── Infinite scroll: detect when near bottom of list ──
-	useEffect(() => {
-		const el = listRef.current;
-		if (!el) return;
-		const onScroll = () => {
-			if (!hasMore || loadingMore || backfillingRef.current || backfillExhaustedRef.current) return;
-			const { scrollTop, scrollHeight, clientHeight } = el;
-			if (scrollHeight - scrollTop - clientHeight < 300) {
-				loadMoreEmails();
-			}
-		};
-		el.addEventListener('scroll', onScroll, { passive: true });
-		return () => el.removeEventListener('scroll', onScroll);
-	}, [hasMore, loadingMore, loadMoreEmails]);
-
-	// Write iframe content when email changes
-	useEffect(() => {
-		if (selectedIdx !== null && emails[selectedIdx]) {
-			const email = emails[selectedIdx];
-			if (iframeRef.current && (email.body_html || email.body_text)) {
-				const doc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document;
-				if (doc) {
-					doc.open();
-					doc.write(buildIframeDoc(email));
-					doc.close();
-				}
-			}
-		}
-	}, [selectedIdx, emails]);
-
-	// Auto-scroll selected list item into view
-	useEffect(() => {
-		if (selectedIdx !== null && listRef.current) {
-			const btn = listRef.current.querySelector(`[data-idx="${selectedIdx}"]`) as HTMLElement | null;
-			btn?.scrollIntoView({ block: 'nearest' });
-		}
-	}, [selectedIdx]);
-
-	// ── CodeMirror vim editor lifecycle ──
-	useEffect(() => {
-		// Destroy existing editor if any
-		if (cmViewRef.current) {
-			cmViewRef.current.destroy();
-			cmViewRef.current = null;
-		}
-
-		if (!visualMode || !plainText || !cmContainerRef.current) return;
-
-		const container = cmContainerRef.current;
-
-		// ── Monkey-patch: yank always copies to system clipboard ──
-		if (!exDefined.current) {
-			exDefined.current = true;
-			try {
-				const rc = Vim.getRegisterController();
-				if (rc?.constructor?.prototype?.pushText) {
-					const orig = rc.constructor.prototype.pushText;
-					rc.constructor.prototype.pushText = function(
-						registerName: any,
-						operator: string,
-						text: string,
-						linewise: boolean,
-						blockwise: boolean,
-					) {
-						orig.call(this, registerName, operator, text, linewise, blockwise);
-						if (operator === 'yank' && text) {
-							navigator.clipboard.writeText(text);
-							// green flash feedback — find the active CM scroller
-							const scroller = document.querySelector('.cm-scroller');
-							if (scroller) {
-								scroller.classList.add('yanked');
-								setTimeout(() => scroller.classList.remove('yanked'), 400);
-							}
-						}
-					};
-				}
-			} catch { }
-
-			// ── Define :set ex commands ──
-			Vim.defineEx('set', 'se', (cm: any, params: any) => {
-				const view: EditorView | null = cm?.view;
-				if (!view) return;
-				const args: string[] = params?.args || [];
-				for (const arg of args) {
-					switch (arg) {
-						case 'wrap':
-							view.dispatch({ effects: wrapCompRef.current.reconfigure(EditorView.lineWrapping) });
-							break;
-						case 'nowrap':
-							view.dispatch({ effects: wrapCompRef.current.reconfigure([]) });
-							break;
-						case 'nu':
-						case 'number':
-							view.dispatch({ effects: numCompRef.current.reconfigure(lineNumbers()) });
-							break;
-						case 'nonu':
-						case 'nonumber':
-							view.dispatch({ effects: numCompRef.current.reconfigure([]) });
-							break;
-						default:
-							if (cm.state?.statusbar) {
-								cm.state.statusbar.textContent = `Unknown option: ${arg}`;
-							}
-					}
-				}
-			});
-		}
-
-		// Dark theme matching our palette
-		const darkTheme = EditorView.theme({
-			"&": {
-				backgroundColor: "#000",
-				color: "#e4e4e7",
-				height: "100%",
-				fontSize: "13px",
-				fontFamily: '"Iosevka", "Cascadia Code", "Fira Code", "SF Mono", Menlo, Monaco, monospace',
-			},
-			"&.cm-focused": { outline: "none" },
-			".cm-cursor, .cm-dropCursor": { borderLeftColor: "#3b82f6" },
-			".cm-selectionBackground": { backgroundColor: "#3b82f6" },
-			".cm-activeLine": { backgroundColor: "transparent" },
-			".cm-gutters": {
-				backgroundColor: "#000",
-				color: "#52525b",
-				border: "none",
-				borderRight: "1px solid #27272a",
-			},
-			".cm-lineNumbers .cm-activeLineGutter": {
-				backgroundColor: "#18181b",
-				color: "#a1a1aa",
-			},
-			".cm-content": {
-				caretColor: "#3b82f6",
-				padding: "16px 8px",
-			},
-			".cm-line": {
-				padding: "0 4px",
-				lineHeight: "1.7",
-			},
-			".cm-panels": { backgroundColor: "#09090b", color: "#a1a1aa", border: "1px solid #27272a" },
-			".cm-panels-top": { borderBottom: "1px solid #27272a" },
-			".cm-panels-bottom": { borderTop: "1px solid #27272a" },
-			".cm-search": { backgroundColor: "#09090b", padding: "8px" },
-			".cm-button": {
-				backgroundColor: "#18181b",
-				color: "#e4e4e7",
-				border: "1px solid #27272a",
-				borderRadius: "4px",
-				padding: "2px 8px",
-			},
-			".cm-textfield": {
-				backgroundColor: "#09090b",
-				color: "#e4e4e7",
-				border: "1px solid #27272a",
-				borderRadius: "4px",
-				padding: "2px 4px",
-			},
-			".cm-fat-cursor-mark": {
-				backgroundColor: "#3b82f680",
-			},
-		}, { dark: true });
-
-		const state = EditorState.create({
-			doc: plainText,
-			extensions: [
-				darkTheme,
-				wrapCompRef.current.of(EditorView.lineWrapping),
-				numCompRef.current.of([]),
-				drawSelection(),
-				vim(),
-				keymap.of([
-					{
-						// Escape in vim NORMAL mode → exit visual mode entirely
-						// vim() handles Escape first (visual→normal transition).
-						// Only when already in normal mode does this run.
-						key: "Escape",
-						run: () => {
-							setVisualMode(false);
-							setPlainText("");
-							return true;
-						},
-					},
-				]),
-			],
-		});
-
-		const view = new EditorView({ state, parent: container });
-		cmViewRef.current = view;
-		view.focus();
-
-		return () => {
-			view.destroy();
-			cmViewRef.current = null;
-		};
-	}, [visualMode, plainText]);
-
-	// ── Keybindings (only for non-CodeMirror interactions) ──
-	useEffect(() => {
-		const handleKeyDown = (e: KeyboardEvent) => {
-			const tag = (e.target as HTMLElement).tagName;
-			if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-
-			// ── Command Palette (Ctrl+Shift+P) ──
-			if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
-				e.preventDefault();
-				if (paletteOpen) {
-					setPaletteOpen(false);
-				} else {
-					setPaletteQuery("");
-					paletteIdxRef.current = 0;
-					setPaletteOpen(true);
-				}
-				return;
-			}
-
-			// If palette is open, handle Escape to close
-			if (paletteOpen) {
-				if (e.key === 'Escape') {
-					e.preventDefault();
-					setPaletteOpen(false);
-				}
-				return;
-			}
-
-			// If search is open, handle Escape to close
-			if (searchOpen) {
-				if (e.key === 'Escape') {
-					e.preventDefault();
-					setSearchOpen(false);
-				}
-				return;
-			}
-
-			// When Visual Mode is active, CodeMirror handles all vim keys internally.
-			// We only intercept global navigation keys (2, 3) here.
-			if (visualMode && focusedPanel === 'reader') {
-				switch (e.key) {
-					case '2':
-						e.preventDefault();
-						setVisualMode(false);
-						setPlainText("");
-						setFocusedPanel('list');
-						if (emails.length > 0 && selectedIdx === null) setSelectedIdx(0);
-						break;
-					case '3':
-						if (selectedIdx !== null && emails[selectedIdx]) {
-							e.preventDefault();
-							setVisualMode(false);
-							setPlainText("");
-							setFocusedPanel('reader');
-						}
-						break;
-				}
-				return;
-			}
-
-			// ── Ctrl+B: toggle sidebar ──
-			if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
-				e.preventDefault();
-				setSidebarOpen(p => !p);
-				return;
-			}
-
-			// ── Ctrl+K: open email search ──
-			if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-				e.preventDefault();
-				setSearchOpen(true);
-				setSearchResultIndex(0);
-				return;
-			}
-
-			// ── Ctrl+P: move to previous search result ──
-			if ((e.ctrlKey || e.metaKey) && e.key === 'p' && searchOpen) {
-				e.preventDefault();
-				const searchResults = searchEmails(emails, searchQuery);
-				setSearchResultIndex(prev => (prev > 0 ? prev - 1 : searchResults.length - 1));
-				return;
-			}
-
-			// ── Ctrl+N: move to next search result ──
-			if ((e.ctrlKey || e.metaKey) && e.key === 'n' && searchOpen) {
-				e.preventDefault();
-				const searchResults = searchEmails(emails, searchQuery);
-				setSearchResultIndex(prev => (prev < searchResults.length - 1 ? prev + 1 : 0));
-				return;
-			}
-
-			switch (e.key) {
-				case '2':
-					e.preventDefault();
-					setFocusedPanel('list');
-					if (emails.length > 0 && selectedIdx === null) setSelectedIdx(0);
-					break;
-
-				case '3':
-					if (selectedIdx !== null && emails[selectedIdx]) {
-						e.preventDefault();
-						setFocusedPanel('reader');
-					}
-					break;
-
-				case 'j':
-					if (focusedPanel === 'list' && emails.length > 0) {
-						e.preventDefault();
-						lastGKeyTimeRef.current = 0;
-						setSelectedIdx(p => p === null ? 0 : Math.min(p + 1, emails.length - 1));
-					} else if (focusedPanel === 'reader' && iframeRef.current?.contentWindow) {
-						e.preventDefault();
-						iframeRef.current.contentWindow.scrollBy(0, 60);
-					}
-					break;
-
-				case 'g':
-					if (focusedPanel === 'list' && emails.length > 0) {
-						e.preventDefault();
-						const now = Date.now();
-						if (now - lastGKeyTimeRef.current < 400) {
-							// gg — go to top
-							lastGKeyTimeRef.current = 0;
-							setSelectedIdx(0);
-						} else {
-							lastGKeyTimeRef.current = now;
-							// Auto-clear after timeout so a lone 'g' doesn't
-							// pair with a future 'g' press
-							setTimeout(() => {
-								if (lastGKeyTimeRef.current === now) {
-									lastGKeyTimeRef.current = 0;
-								}
-							}, 400);
-						}
-					}
-					break;
-
-				case 'G':
-					if (focusedPanel === 'list' && emails.length > 0) {
-						e.preventDefault();
-						lastGKeyTimeRef.current = 0;
-						setSelectedIdx(emails.length - 1);
-					}
-					break;
-
-				case 'k':
-					if (focusedPanel === 'list' && emails.length > 0) {
-						e.preventDefault();
-						lastGKeyTimeRef.current = 0;
-						setSelectedIdx(p => p === null ? 0 : Math.max(p - 1, 0));
-					} else if (focusedPanel === 'reader' && iframeRef.current?.contentWindow) {
-						e.preventDefault();
-						iframeRef.current.contentWindow.scrollBy(0, -60);
-					}
-					break;
-
-				case 'Enter':
-					if (focusedPanel === 'list' && selectedIdx !== null) {
-						e.preventDefault();
-						setVisualMode(false);
-						setPlainText("");
-						setFocusedPanel('reader');
-					}
-					break;
-
-				case 's':
-					if (focusedPanel === 'list' && selectedIdx !== null && emails[selectedIdx]) {
-						e.preventDefault();
-						lastGKeyTimeRef.current = 0;
-						const email = emails[selectedIdx];
-						if (email.id !== undefined) {
-							markSeen(email.id).then(() => {
-								setEmails(prev => {
-									const updated = [...prev];
-									const idx = updated.findIndex(e => e.id === email.id);
-									if (idx !== -1) {
-										updated[idx] = { ...updated[idx], flags: "S" };
-									}
-									return updated;
-								});
-							}).catch(() => {});
-						}
-					}
-					break;
-
-				case 'u':
-					if (focusedPanel === 'list' && selectedIdx !== null && emails[selectedIdx]) {
-						e.preventDefault();
-						lastGKeyTimeRef.current = 0;
-						const email = emails[selectedIdx];
-						if (email.id !== undefined) {
-							markUnread(email.id).then(() => {
-								setEmails(prev => {
-									const updated = [...prev];
-									const idx = updated.findIndex(e => e.id === email.id);
-									if (idx !== -1) {
-										updated[idx] = { ...updated[idx], flags: "" };
-									}
-									return updated;
-								});
-							}).catch(() => {});
-						}
-					}
-					break;
-
-				case 'v':
-					if (focusedPanel === 'reader' && selectedIdx !== null && (emails[selectedIdx]?.body_html || emails[selectedIdx]?.body_text)) {
-						e.preventDefault();
-						const text = stripHtml(emails[selectedIdx].body_html || emails[selectedIdx].body_text || "");
-						if (text.trim()) {
-							setPlainText(text);
-							setVisualMode(true);
-						}
-					}
-					break;
-
-				case 'Escape':
-					if (focusedPanel === 'reader') {
-						e.preventDefault();
-						setFocusedPanel('list');
-					}
-					break;
-			}
-		};
-
-		window.addEventListener('keydown', handleKeyDown);
-		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [focusedPanel, visualMode, emails, selectedIdx, plainText, paletteOpen, searchOpen, searchQuery, searchResultIndex]);
-
-	// ── Resizers ──
-	const startDragging1 = (e: React.MouseEvent) => {
-		e.preventDefault();
-		setIsDragging1(true);
-		const startX = e.clientX;
-		const startWidth = col1Width;
-		const onMouseMove = (me: MouseEvent) => setCol1Width(Math.max(160, Math.min(startWidth + me.clientX - startX, 400)));
-		const onMouseUp = () => { setIsDragging1(false); document.removeEventListener("mousemove", onMouseMove); document.removeEventListener("mouseup", onMouseUp); };
-		document.addEventListener("mousemove", onMouseMove);
-		document.addEventListener("mouseup", onMouseUp);
-	};
-
-	const startDragging2 = (e: React.MouseEvent) => {
-		e.preventDefault();
-		setIsDragging2(true);
-		const startX = e.clientX;
-		const startWidth = col2Width;
-		const onMouseMove = (me: MouseEvent) => setCol2Width(Math.max(260, Math.min(startWidth + me.clientX - startX, 600)));
-		const onMouseUp = () => { setIsDragging2(false); document.removeEventListener("mousemove", onMouseMove); document.removeEventListener("mouseup", onMouseUp); };
-		document.addEventListener("mousemove", onMouseMove);
-		document.addEventListener("mouseup", onMouseUp);
-	};
-
-	const handleRefresh = () => {
-		setRefreshing(true);
-		setSelectedIdx(null);
-		setVisualMode(false);
-		setPlainText("");
-		setHasMore(true);
-		setBackfillExhausted(false);
-		backfillExhaustedRef.current = false;
-		backfillingRef.current = false;
-		if (cmViewRef.current) { cmViewRef.current.destroy(); cmViewRef.current = null; }
-		fetchData(true);
-	};
-
-	const selectedEmail = selectedIdx !== null ? emails[selectedIdx] : null;
-	const isDraggingAny = isDragging1 || isDragging2;
-
-	const COMMANDS = [
-		{ id: "settings", label: "Settings", execute: () => setSettingsOpen(true) },
-	];
+	const {
+		emails, accounts, loading, loadingMore, backfilling, backfillExhausted,
+		hasMore, error, selectedIdx, refreshing, focusedPanel, visualMode, plainText,
+		listRef, cmContainerRef, iframeRef, paletteRef, searchRef,
+		setSelectedIdx, setFocusedPanel, setVisualMode, setPlainText,
+		setHasMore, setBackfillExhausted, setError,
+		col1Width, sidebarOpen, col2Width, isDragging1, isDragging2, isMobile,
+		setSidebarOpen,
+		paletteOpen, paletteQuery, paletteIdxRef,
+		settingsOpen, theme, setPaletteOpen, setPaletteQuery,
+		setSettingsOpen, setTheme,
+		searchOpen, searchQuery, searchResultIndex,
+		setSearchOpen, setSearchQuery, setSearchResultIndex,
+		fetchData, handleRefresh,
+		startDragging1, startDragging2,
+		selectedEmail, isDraggingAny, COMMANDS,
+	} = useMailStore();
 
 	return (
 		<div
@@ -820,7 +31,7 @@ export default function App() {
 			{/* ── 3 Column Workplace ── */}
 			<div className="flex flex-1 min-h-0 w-full overflow-hidden pt-3 pb-3">
 
-				{/* ── Column 1: Sidebar (collapsible with Ctrl+B) ── */}
+				{/* ── Column 1: Sidebar ── */}
 				<aside
 					className={`hidden md:block overflow-hidden bg-black shrink-0 transition-[width] duration-200 ease-in-out border-r border-zinc-900`}
 					style={{ width: isMobile ? '0px' : sidebarOpen ? `${col1Width}px` : '52px' }}
@@ -948,7 +159,6 @@ export default function App() {
 											<button
 												onClick={() => {
 													setBackfillExhausted(false);
-													backfillExhaustedRef.current = false;
 													setHasMore(true);
 												}}
 												className="mt-2 text-[9px] font-mono text-zinc-500 hover:text-zinc-300 underline underline-offset-2 decoration-zinc-700"
@@ -1050,9 +260,7 @@ export default function App() {
 					className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
 					onClick={() => setPaletteOpen(false)}
 				>
-					{/* Backdrop */}
 					<div className="absolute inset-0 bg-black/60" />
-					{/* Palette */}
 					<div
 						className="relative w-full max-w-lg rounded-lg border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/60 overflow-hidden"
 						onClick={e => e.stopPropagation()}
@@ -1076,17 +284,11 @@ export default function App() {
 									switch (e.key) {
 										case 'ArrowDown':
 											e.preventDefault();
-											paletteIdxRef.current = Math.min(
-												paletteIdxRef.current + 1,
-												filtered.length - 1
-											);
+											paletteIdxRef.current = Math.min(paletteIdxRef.current + 1, filtered.length - 1);
 											break;
 										case 'ArrowUp':
 											e.preventDefault();
-											paletteIdxRef.current = Math.max(
-												paletteIdxRef.current - 1,
-												0
-											);
+											paletteIdxRef.current = Math.max(paletteIdxRef.current - 1, 0);
 											break;
 										case 'Enter':
 											e.preventDefault();
@@ -1118,9 +320,7 @@ export default function App() {
 									c.label.toLowerCase().includes(paletteQuery.toLowerCase())
 								).map((cmd, i) => {
 									const selected = i === paletteIdxRef.current;
-									const idx = cmd.label.toLowerCase().indexOf(
-										paletteQuery.toLowerCase()
-									);
+									const idx = cmd.label.toLowerCase().indexOf(paletteQuery.toLowerCase());
 									return (
 										<button
 											key={cmd.id}
@@ -1178,7 +378,6 @@ export default function App() {
 
 						<p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-3">Theme</p>
 						<div className="grid grid-cols-2 gap-3">
-							{/* Default theme */}
 							<button
 								onClick={() => setTheme('default')}
 								className={`rounded-lg border p-4 text-left transition ${theme === 'default' ? 'border-zinc-500 bg-zinc-900' : 'border-zinc-800 bg-zinc-950 hover:border-zinc-600'}`}
@@ -1193,7 +392,6 @@ export default function App() {
 									<span className="h-1.5 w-4 rounded bg-blue-500/50" />
 								</div>
 							</button>
-							{/* Catppuccin Mocha */}
 							<button
 								onClick={() => setTheme('catppuccin')}
 								className={`rounded-lg border p-4 text-left transition ${theme === 'catppuccin' ? 'border-zinc-500 bg-zinc-900' : 'border-zinc-800 bg-zinc-950 hover:border-zinc-600'}`}
@@ -1225,9 +423,7 @@ export default function App() {
 					className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
 					onClick={() => setSearchOpen(false)}
 				>
-					{/* Backdrop */}
 					<div className="absolute inset-0 bg-black/60" />
-					{/* Search Popup */}
 					<div
 						className="relative w-full max-w-2xl rounded-lg border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/60 overflow-hidden"
 						onClick={e => e.stopPropagation()}
@@ -1242,7 +438,7 @@ export default function App() {
 								value={searchQuery}
 								onChange={e => setSearchQuery(e.target.value)}
 								onKeyDown={e => {
-									const searchResults = searchEmails(emails, searchQuery);
+									const results = searchEmails(emails, searchQuery);
 									switch (e.key) {
 										case 'Escape':
 											e.preventDefault();
@@ -1250,16 +446,16 @@ export default function App() {
 											break;
 										case 'ArrowDown':
 											e.preventDefault();
-											setSearchResultIndex(prev => (prev < searchResults.length - 1 ? prev + 1 : 0));
+											setSearchResultIndex(prev => (prev < results.length - 1 ? prev + 1 : 0));
 											break;
 										case 'ArrowUp':
 											e.preventDefault();
-											setSearchResultIndex(prev => (prev > 0 ? prev - 1 : searchResults.length - 1));
+											setSearchResultIndex(prev => (prev > 0 ? prev - 1 : results.length - 1));
 											break;
 										case 'Enter':
 											e.preventDefault();
-											if (searchResults[searchResultIndex]) {
-												const idx = emails.indexOf(searchResults[searchResultIndex]);
+											if (results[searchResultIndex]) {
+												const idx = emails.indexOf(results[searchResultIndex]);
 												if (idx !== -1) {
 													setSelectedIdx(idx);
 													setFocusedPanel('reader');
@@ -1288,7 +484,6 @@ export default function App() {
 							) : (
 								searchEmails(emails, searchQuery).map((email, i) => {
 									const unread = isUnread(email);
-									const active = selectedIdx === emails.indexOf(email);
 									const isSelected = i === searchResultIndex;
 									return (
 										<button
@@ -1310,7 +505,7 @@ export default function App() {
 													<span className={`truncate ${unread ? "font-bold text-white" : "text-zinc-300"}`}>{extractName(email.from_addr)}</span>
 													{unread && <span className="shrink-0 text-[8px] font-bold bg-white text-black px-1.5 py-0.5 rounded">UNREAD</span>}
 												</div>
-												<p className={`mt-1.5 truncate ${unread ? "font-medium" : ""}`}>{highlightText(email.subject, searchQuery)}</p>
+												<p className={`mt-1.5 truncate ${unread ? "font-medium" : ""}`}>{highlightSegments(email.subject, searchQuery).map((seg, i) => seg.highlight ? <span key={i} className="bg-yellow-500/20 text-yellow-400 font-medium">{seg.text}</span> : seg.text)}</p>
 												{bodyPreview(email) && <p className="mt-1 truncate text-[10px] text-zinc-500">{bodyPreview(email, 100)}</p>}
 											</div>
 										</button>
