@@ -227,7 +227,7 @@ export function useMailStore() {
 				backfillingRef.current = true;
 				setBackfilling(true);
 				try {
-					await triggerBackfill(20, mb);
+					await triggerBackfill(50, mb);
 					let newData: Email[] = [];
 					const maxRetries = 6;
 					for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -701,7 +701,7 @@ export function useMailStore() {
 								if (idx !== -1) updated[idx] = { ...updated[idx], flags: "S" };
 								return updated;
 							});
-						}).catch(() => {});
+						}).catch(() => { });
 					}
 				}
 				break;
@@ -720,7 +720,7 @@ export function useMailStore() {
 								if (idx !== -1) updated[idx] = { ...updated[idx], flags: "" };
 								return updated;
 							});
-						}).catch(() => {});
+						}).catch(() => { });
 					}
 				}
 				break;
